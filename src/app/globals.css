@@ -1,26 +1,119 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * HAM design tokens — System A ("Cut & Paste").
+ * Canonical source: organization-docs/BRAND.md §2. Do not invent values here.
+ */
+@theme {
+  --color-paper: #f6f1e5;
+  --color-ink: #1c1a17;
+  --color-muted: #5c5648;
+  --color-surface: #fffdf6;
+  --color-border: #1c1a17;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
+  /* Decorative only: stamps, hand-drawn underlines, large accents.
+     Never body text, never links, never the sole indicator of status. */
+  --color-decorative-red: #d93625;
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+  /* Links, buttons, active states, focus outline. */
+  --color-interactive-blue: #1d4ed8;
+
+  /*
+   * Both faces are self-hosted WOFF2, declared with next/font/local in
+   * layout.tsx. next/font supplies the fallback metrics, so the stacks below
+   * only need the generated variable.
+   */
+  --font-display: var(--font-ham-display), system-ui, "Arial Black", sans-serif;
+  --font-body: var(--font-ham-body), Verdana, system-ui, sans-serif;
+
+  /* Scroll cue nudge — frozen by the reduced-motion block below. */
+  --animate-nudge: nudge 2.6s ease-in-out infinite;
+
+  @keyframes nudge {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(0.28rem);
+    }
   }
+
+  /* Near-zero radii across cards, panels, and frames. */
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 1px;
+  --radius-lg: 1px;
+}
+
+:root {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/*
+ * The single permitted paper texture (BRAND.md §5): CSS grain at ~4%, rendered
+ * behind all content so it never degrades text contrast. Inline SVG, no
+ * network request, well under the 10KB tile budget.
+ */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.045;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23g)'/%3E%3C/svg%3E");
+}
+
+/* High-visibility 3px offset focus outline (BRAND.md §2, WEBSITE.md §9). */
+:focus-visible {
+  outline: 3px solid var(--color-interactive-blue);
+  outline-offset: 3px;
+}
+
+/*
+ * Display type. Bricolage Grotesque tops out at 800; synthesis stays off so a
+ * fallback render never smears a fake bold over it.
+ */
+.font-display {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-synthesis: none;
+  letter-spacing: -0.015em;
+}
+
+/*
+ * Card/panel rotation is disabled below 400px (BRAND.md §5). Stamps use
+ * .stamp-tilt instead and keep their restrained rotation at every width.
+ */
+.card-tilt {
+  transform: rotate(-0.4deg);
+}
+
+@media (max-width: 399px) {
+  .card-tilt {
+    transform: none;
+  }
+}
+
+/*
+ * Reduced motion: disclosure expansion, hover transitions, and the scroll cue
+ * all become immediate/static (BRAND.md §5, WEBSITE.md §9).
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
