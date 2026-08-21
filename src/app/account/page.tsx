@@ -16,15 +16,6 @@ export default async function AccountPage() {
   return (
     <>
       <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-12 pb-16 sm:px-8 sm:pt-20">
-        <nav aria-label="Navigation" className="mb-8">
-          <Link
-            href="/"
-            className="inline-flex items-center gap-2 text-sm font-bold text-interactive-blue underline underline-offset-4"
-          >
-            <span aria-hidden="true">&#8592;</span> Back to HAM
-          </Link>
-        </nav>
-
         <header className="max-w-2xl">
           <div className="flex items-center gap-4">
             <Link href="/" aria-label="HAM Home">

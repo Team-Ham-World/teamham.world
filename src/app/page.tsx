@@ -19,10 +19,17 @@ export default function Home() {
             HAM is a group of friends who make things on the internet.
           </p>
 
-          <p className="mt-10 flex items-start gap-3 text-sm font-bold tracking-[0.16em] text-muted uppercase">
+          <p className="mt-10 flex items-baseline gap-3 text-sm font-bold tracking-[0.16em] text-muted uppercase">
+            {/*
+             * Baseline alignment keeps the cue on the first line when the label
+             * wraps; the 1px lift optically centers the arrow against the
+             * all-caps label, since the glyph carries ink below the baseline and
+             * the capitals do not. Offset via `top` because the nudge animation
+             * owns `transform`.
+             */}
             <span
               aria-hidden="true"
-              className="animate-nudge inline-block text-base"
+              className="animate-nudge relative -top-px inline-block text-base"
             >
               &#8595;
             </span>
