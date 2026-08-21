@@ -115,9 +115,10 @@ export default async function AccountPage() {
                   </li>
                   <li>
                     <strong className="text-ink">Data storage:</strong> We store
-                    only your Discord user ID and membership eligibility flags in
-                    our database. We do not store your profile, username, email,
-                    avatar, or IP address.
+                    only your Discord user ID, your Discord username, and
+                    membership eligibility flags in our database. The username is
+                    kept solely to show you which account you are signed in as. We
+                    do not store your email, avatar, or IP address.
                   </li>
                   <li>
                     <strong className="text-ink">Purpose:</strong> Stored data is

@@ -205,6 +205,7 @@ describe('Proxy and Cache Headers Integration', () => {
           accessStatus: 'active',
           membershipStatus: 'eligible',
           expiresAt: new Date(Date.now() + 86400000),
+          username: 'hamfriend',
         },
       });
 

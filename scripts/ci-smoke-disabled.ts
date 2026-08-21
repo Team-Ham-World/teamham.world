@@ -55,6 +55,7 @@ async function runSmokeTests(): Promise<void> {
     { path: "/account", method: "GET" },
     { path: "/api/auth/discord/login", method: "GET" },
     { path: "/api/auth/discord/callback", method: "GET" },
+    { path: "/api/auth/session", method: "GET" },
     { path: "/api/auth/logout", method: "POST" },
   ];
 

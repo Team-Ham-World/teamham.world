@@ -1,12 +1,19 @@
 import { neon } from '@neondatabase/serverless';
 import { getAuthConfig } from './config';
-import { isValidDiscordId, isValidTokenHash, isValidUuid } from './crypto';
+import {
+  isValidDiscordId,
+  isValidDiscordUsername,
+  isValidTokenHash,
+  isValidUuid,
+} from './crypto';
 
 export interface VerifiedAccount {
   id: string;
   accessStatus: 'active';
   membershipStatus: 'eligible';
   expiresAt: string | Date;
+  /** Display-only Discord username; null when none was captured at login. */
+  username: string | null;
 }
 
 export type SessionVerificationResult =
@@ -103,6 +110,7 @@ export async function verifySession(
         a.id AS account_id,
         a.access_status,
         a.membership_status,
+        a.discord_username,
         s.expires_at
     FROM public.sessions s
     JOIN public.accounts a ON s.account_id = a.id
@@ -115,6 +123,7 @@ export async function verifySession(
     account_id: string;
     access_status: string;
     membership_status: string;
+    discord_username: string | null;
     expires_at: string | Date;
   }>;
 
@@ -133,6 +142,9 @@ export async function verifySession(
           accessStatus: 'active',
           membershipStatus: 'eligible',
           expiresAt: row.expires_at,
+          // Cosmetic field: an unreadable username degrades to null instead of
+          // failing an otherwise valid session.
+          username: isValidDiscordUsername(row.discord_username) ? row.discord_username : null,
         },
       };
     }
@@ -148,6 +160,7 @@ export async function verifySession(
 
 export async function issueLoginSession(
   discordUserId: string,
+  discordUsername: string | null,
   tokenHash: string,
   databaseUrl?: string
 ): Promise<IssueSessionResult> {
@@ -155,19 +168,25 @@ export async function issueLoginSession(
     throw new Error('Invalid Discord user ID or token hash format');
   }
 
+  // The username is display-only, so an unusable value is dropped rather than
+  // thrown: it must never be the reason a member cannot sign in.
+  const username = isValidDiscordUsername(discordUsername) ? discordUsername : null;
+
   const sql = getDbClient(databaseUrl);
 
   const rows = (await sql`
     WITH upsert_account AS (
         INSERT INTO public.accounts (
             discord_user_id,
+            discord_username,
             membership_status,
             access_status,
             membership_checked_at
         )
-        VALUES (${discordUserId}, 'eligible', 'active', NOW())
+        VALUES (${discordUserId}, ${username}, 'eligible', 'active', NOW())
         ON CONFLICT (discord_user_id) DO UPDATE
         SET
+            discord_username = COALESCE(EXCLUDED.discord_username, accounts.discord_username),
             membership_status = 'eligible',
             membership_checked_at = NOW(),
             updated_at = NOW()

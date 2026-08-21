@@ -1,4 +1,5 @@
 import { HamWordmark } from "@/components/ham-wordmark";
+import { MemberBadge } from "@/components/member-badge";
 import { ProjectShelf } from "@/components/project-shelf";
 
 /*
@@ -8,8 +9,15 @@ import { ProjectShelf } from "@/components/project-shelf";
 export default function Home() {
   return (
     <>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-20 pb-16 sm:px-8 sm:pt-28">
-        <section className="max-w-3xl">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-10 pb-16 sm:px-8 sm:pt-14">
+        {/*
+         * Resolved in the browser, not at build time: keeping the session out
+         * of the prerender is what lets this page stay static and publicly
+         * cacheable. See the component for the full reasoning.
+         */}
+        <MemberBadge />
+
+        <section className="mt-10 max-w-3xl sm:mt-14">
           {/* The wordmark is the group's own hand-drawn mark, traced to vector. */}
           <h1>
             <HamWordmark className="h-auto w-52 text-ink sm:w-64" />

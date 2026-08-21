@@ -15,6 +15,9 @@ const PKCE_VERIFIER_REGEX = /^[A-Za-z0-9_-]{43}$/;
 const SESSION_TOKEN_REGEX = /^[A-Za-z0-9_-]{43}$/;
 const TOKEN_HASH_REGEX = /^[0-9a-f]{64}$/;
 const DISCORD_ID_REGEX = /^[0-9]{1,20}$/;
+// Discord's current username shape. Values that fail it are dropped rather
+// than stored, so a legacy or unexpected handle never blocks a login.
+const DISCORD_USERNAME_REGEX = /^[A-Za-z0-9._]{2,32}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function generateOAuthState(): string {
@@ -65,6 +68,10 @@ export function isValidDiscordId(id: unknown): id is string {
 
 export function isValidUuid(id: unknown): id is string {
   return typeof id === 'string' && UUID_REGEX.test(id);
+}
+
+export function isValidDiscordUsername(username: unknown): username is string {
+  return typeof username === 'string' && DISCORD_USERNAME_REGEX.test(username);
 }
 
 function getHmacKey(secret: string): Buffer {

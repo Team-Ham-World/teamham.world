@@ -659,8 +659,39 @@ if [[ "$STATE" == "migrated_0001" ]]; then
   fi
 fi
 
+# Migration 0003 application
+#
+# Unlike 0001 and 0002 this migration adds a column rather than tables, so the
+# table-count state machine above cannot see it. Detect the column directly.
 if [[ "$STATE" == "migrated_0002" ]]; then
-  say "${GREEN}✓${RESET} All migrations (0001 and 0002) are up to date."
+  HAS_USERNAME_COLUMN=$(run_owner_query "SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'accounts' AND column_name = 'discord_username';")
+
+  if [[ -z "$HAS_USERNAME_COLUMN" ]]; then
+    printf '\n'
+    say "Migration 0003_account_display_name.sql adds:"
+    say "  - Column: accounts.discord_username (nullable, display only)"
+    say "  - Least-privilege INSERT and UPDATE grants on that column to app_runtime_role"
+    printf '\n'
+    warn "Applying migration 0003 is an irreversible schema change."
+    if ! confirm "Apply migration 0003_account_display_name.sql in a single transaction now?"; then
+      warn "Migration 0003 cancelled by user."
+      exit 1
+    fi
+    say "Applying migrations/0003_account_display_name.sql..."
+    if run_owner_sql_file "$PROJECT_ROOT/migrations/0003_account_display_name.sql" "true"; then
+      say "${GREEN}✓${RESET} Migration 0003_account_display_name.sql applied successfully."
+      STATE="migrated_0003"
+    else
+      warn "Failed to apply migration 0003_account_display_name.sql."
+      exit 1
+    fi
+  else
+    STATE="migrated_0003"
+  fi
+fi
+
+if [[ "$STATE" == "migrated_0003" ]]; then
+  say "${GREEN}✓${RESET} All migrations (0001 through 0003) are up to date."
   note "CREATE migrations will never be rerun."
 fi
 
