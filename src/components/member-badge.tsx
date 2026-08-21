@@ -14,6 +14,10 @@ import { useEffect, useState } from "react";
  * signed-out visitor, or nothing at all when the endpoint is unreachable or
  * auth is switched off entirely — an unknown session is never rendered as an
  * invitation to sign in.
+ *
+ * Both states link to `/account`: signed-in members land on their portal, and
+ * signed-out visitors read the sign-in disclosure there before starting the
+ * Discord flow themselves.
  */
 
 interface SessionStatus {
@@ -83,7 +87,7 @@ export function MemberBadge() {
         </a>
       ) : (
         <a
-          href="/api/auth/discord/login"
+          href="/account"
           className="inline-flex items-center justify-center border-2 border-ink bg-paper px-4 py-2 text-xs font-bold tracking-[0.14em] text-ink uppercase shadow-[3px_3px_0_0_var(--color-ink)] transition-[transform,background-color,color] hover:-translate-y-0.5 hover:bg-ink hover:text-paper active:translate-x-0.5 active:translate-y-0.5"
         >
           Member sign in
