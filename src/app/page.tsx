@@ -113,8 +113,9 @@ export default function Home() {
           <p className="mt-6 text-lg leading-relaxed text-muted">
             HAM is a private group of friends. We hang out in our own Discord
             and build things when someone has an idea and other people show up.
-            There&#8217;s nothing to join and nothing to buy&#8212;this page is
-            just our shelf, made public so the things have a home.
+            This page is our public shelf, but the things on it are for HAM
+            members. Joining happens privately through the group, not through
+            this website, and there&#8217;s nothing to buy.
           </p>
         </section>
       </main>
