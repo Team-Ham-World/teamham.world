@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 
+import { SiteNav } from "@/components/site-nav";
+
 import "./globals.css";
 
 const DESCRIPTION = "HAM is a group of friends who make things on the internet.";
@@ -59,7 +61,10 @@ export default function RootLayout({
       lang="en"
       className={`${display.variable} ${body.variable} h-full`}
     >
-      <body className="flex min-h-full flex-col">{children}</body>
+      <body className="flex min-h-full flex-col">
+        <SiteNav />
+        {children}
+      </body>
     </html>
   );
 }
