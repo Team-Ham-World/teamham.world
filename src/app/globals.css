@@ -27,12 +27,11 @@
   --font-body: var(--font-ham-body), Verdana, system-ui, sans-serif;
 
   /*
-   * Third family, and a deliberate exception to BRAND.md §2's "exactly two".
-   * The hero mascot is drawn out of characters, and character art only holds
-   * its shape on a grid where every glyph occupies the same cell — neither
-   * Bricolage nor Atkinson does. This is the platform's own monospace, so it
-   * adds no payload, and it is scoped to the mascot alone: no heading, label,
-   * or run of copy is ever set in it.
+   * BRAND.md §2's character-art exception, and nothing else. Character art only
+   * holds its shape on a grid where every glyph occupies the same cell, which
+   * neither Bricolage nor Atkinson provides. This is the platform's own
+   * monospace, so it adds no payload, and its scope is the mascot alone: no
+   * heading, label, or run of copy is ever set in it.
    */
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
     "DejaVu Sans Mono", monospace;
