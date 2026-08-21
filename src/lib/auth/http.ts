@@ -71,7 +71,9 @@ export function getCookieValue(request: Request, cookieName: string): string | n
 export function applyProtectedHeaders(headers: Headers): Headers {
   headers.set('Cache-Control', 'private, no-cache, no-store, max-age=0, must-revalidate');
   headers.set('Pragma', 'no-cache');
-  headers.set('Referrer-Policy', 'no-referrer');
+  // Must not be 'no-referrer': that policy makes browsers send `Origin: null` on
+  // same-origin form POSTs, which breaks the logout route's Origin check.
+  headers.set('Referrer-Policy', 'same-origin');
 
   const existingVary = headers.get('Vary');
   if (!existingVary) {

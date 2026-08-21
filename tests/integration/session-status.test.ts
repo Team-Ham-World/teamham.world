@@ -44,7 +44,7 @@ describe('Session Status Endpoint', () => {
     expect(response.headers.get('cache-control')).toBe(
       'private, no-cache, no-store, max-age=0, must-revalidate'
     );
-    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('referrer-policy')).toBe('same-origin');
     expect((response.headers.get('vary') || '').toLowerCase()).toContain('cookie');
   }
 
