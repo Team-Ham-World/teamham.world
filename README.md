@@ -28,7 +28,20 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to view the application.
+Open [https://localhost:3000](https://localhost:3000) to view the application.
+
+The dev server runs over HTTPS deliberately. `APP_BASE_URL` is
+`https://localhost:3000`, the session cookies are `__Host-`/`Secure`, and the
+logout route requires the request `Origin` to match `APP_BASE_URL` exactly — so
+serving dev over plain http breaks sign-in and logout with origin errors.
+
+The first run generates a local certificate into `certificates/` via `mkcert`
+and may prompt for your password. Later runs reuse it. The directory is
+gitignored and must not be committed.
+
+If you see `Failed to generate self-signed certificate. Falling back to http.`,
+fix the certificate rather than browsing over http — the fallback is what
+produces those origin errors.
 
 ## Validation & Scripts
 

@@ -506,6 +506,21 @@ describe('lib/auth/config', () => {
       });
       expect(validateLogoutOrigin(wrongHostReq, config)).toBe(false);
     });
+
+    // Browsers serialize the origin as the literal string 'null' when the
+    // document's referrer policy is 'no-referrer'. Protected pages must not use
+    // that policy, or the logout form POST is rejected here. See
+    // applyProtectedHeaders in lib/auth/http.ts.
+    it('rejects an opaque `null` Origin', () => {
+      setTestEnv(VALID_PROD_ENV);
+      const config = getAuthConfig();
+
+      const nullOriginReq = new Request('https://teamham.world/api/auth/logout', {
+        method: 'POST',
+        headers: { origin: 'null' },
+      });
+      expect(validateLogoutOrigin(nullOriginReq, config)).toBe(false);
+    });
   });
 
   describe('scripts/preflight.ts CLI validation', () => {

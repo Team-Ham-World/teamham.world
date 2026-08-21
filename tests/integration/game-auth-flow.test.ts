@@ -68,7 +68,9 @@ describe('Game Route Authorization Contract Integration Tests', () => {
       'private, no-cache, no-store, max-age=0, must-revalidate'
     );
     expect(response.headers.get('pragma')).toBe('no-cache');
-    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('referrer-policy')).toBe(
+      isOAuthJson ? 'no-referrer' : 'same-origin'
+    );
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
 
     const vary = response.headers.get('vary') || '';

@@ -6,7 +6,7 @@
     "node": ">=24 <25"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --experimental-https",
     "prebuild": "npm run preflight",
     "build": "next build",
     "start": "next start",

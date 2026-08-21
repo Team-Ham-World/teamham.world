@@ -4,7 +4,7 @@ import path from 'node:path';
 import { NextRequest } from 'next/server';
 import { proxy, config as proxyConfig } from '@/proxy';
 import { generateSessionToken, hashSessionToken } from '@/lib/auth/crypto';
-import { SESSION_COOKIE_NAME } from '@/lib/auth/http';
+import { applyProtectedHeaders, SESSION_COOKIE_NAME } from '@/lib/auth/http';
 import * as dbModule from '@/lib/auth/db';
 import { VALID_PROD_ENV, setTestEnv, clearAuthEnv } from '../helpers/test-fixtures';
 
@@ -39,7 +39,7 @@ describe('Proxy and Cache Headers Integration', () => {
     expect(response.headers.get('cache-control')).toBe(
       'private, no-cache, no-store, max-age=0, must-revalidate'
     );
-    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('referrer-policy')).toBe('same-origin');
     const vary = response.headers.get('vary') || '';
     expect(vary.toLowerCase()).toContain('cookie');
   }
@@ -292,6 +292,26 @@ describe('Proxy and Cache Headers Integration', () => {
       // Session cookie MUST NOT be cleared on DB failure
       const cookies = getSetCookieHeaders(res);
       expect(cookies.some((c) => c.includes(`${SESSION_COOKIE_NAME}=;`))).toBe(false);
+    });
+  });
+
+  describe('Referrer-Policy contract for the logout form POST', () => {
+    // Under a 'no-referrer' policy browsers send `Origin: null` on same-origin
+    // form POSTs, so the logout route's Origin check rejects its own form.
+    // Any policy that keeps the real origin on a same-origin POST is fine.
+    const ORIGIN_PRESERVING = [
+      'same-origin',
+      'strict-origin',
+      'strict-origin-when-cross-origin',
+      'no-referrer-when-downgrade',
+      'origin',
+      'origin-when-cross-origin',
+      'unsafe-url',
+    ];
+
+    it('never sends protected documents with a policy that opaques the Origin', () => {
+      const headers = applyProtectedHeaders(new Headers());
+      expect(ORIGIN_PRESERVING).toContain(headers.get('Referrer-Policy'));
     });
   });
 });

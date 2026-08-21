@@ -1,7 +1,7 @@
 const BASE_URL = process.env.CI_BASE_URL || "http://127.0.0.1:3000";
 
 const PROTECTED_CACHE_CONTROL = "private, no-cache, no-store, max-age=0, must-revalidate";
-const PROTECTED_REFERRER_POLICY = "no-referrer";
+const PROTECTED_REFERRER_POLICY = "same-origin";
 
 async function waitServerReady(baseUrl: string, maxAttempts = 30, delayMs = 500): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
