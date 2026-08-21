@@ -2,8 +2,6 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 
-import { HamWordmark } from "@/components/ham-wordmark";
-
 export const metadata: Metadata = {
   title: "Member Portal — HAM",
   description: "Member access and session management for HAM.",
@@ -15,14 +13,10 @@ export default async function AccountPage() {
 
   return (
     <>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-12 pb-16 sm:px-8 sm:pt-20">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-12 pb-16 sm:px-8 sm:pt-16">
         <header className="max-w-2xl">
-          <div className="flex items-center gap-4">
-            <Link href="/" aria-label="HAM Home">
-              <HamWordmark className="h-auto w-32 text-ink sm:w-40" />
-            </Link>
-          </div>
-          <h1 className="font-display mt-8 text-3xl leading-tight sm:text-4xl md:text-5xl">
+          {/* The wordmark and the route home live in the site header now. */}
+          <h1 className="font-display text-3xl leading-tight sm:text-4xl md:text-5xl">
             {isAuthenticated ? "Member Portal" : "Member Access"}
           </h1>
           <p className="mt-4 text-base leading-relaxed text-muted sm:text-lg">

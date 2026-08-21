@@ -1,33 +1,47 @@
-import { HamWordmark } from "@/components/ham-wordmark";
-import { MemberBadge } from "@/components/member-badge";
+import { PuffScene } from "@/components/puff-scene";
 import { ProjectShelf } from "@/components/project-shelf";
 
 /*
  * Single-page hub. Simple, one-use static sections stay inline here rather than
- * being fragmented into components that would each have exactly one caller.
+ * being fragmented into components that would each have exactly one caller —
+ * the hero's only extracted part is the mascot, which has to be a client island
+ * because it animates.
  */
 export default function Home() {
   return (
     <>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-10 pb-16 sm:px-8 sm:pt-14">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pb-16 sm:px-8">
         {/*
-         * Resolved in the browser, not at build time: keeping the session out
-         * of the prerender is what lets this page stay static and publicly
-         * cacheable. See the component for the full reasoning.
+         * The hero is exactly one viewport tall, less the header above it, so
+         * the mascot is the whole of the first impression and the shelf begins
+         * on the first scroll.
          */}
-        <MemberBadge />
+        <section className="flex min-h-[calc(100svh-var(--nav-height))] flex-col pb-6">
+          <div className="flex flex-1 flex-col gap-6 pt-8 lg:grid lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-10 lg:pt-0">
+            <div className="max-w-2xl">
+              {/* Torn-tag eyebrow. Both halves are facts stated further down the
+                  page: a private group, whose shelf is the public part. */}
+              <p className="inline-flex -rotate-1 items-center border-2 border-ink bg-surface px-3 py-1 text-[0.7rem] font-bold tracking-[0.18em] text-ink uppercase shadow-[3px_3px_0_0_var(--color-ink)] sm:text-xs">
+                Private group &#183; public shelf
+              </p>
 
-        <section className="mt-10 max-w-3xl sm:mt-14">
-          {/* The wordmark is the group's own hand-drawn mark, traced to vector. */}
-          <h1>
-            <HamWordmark className="h-auto w-52 text-ink sm:w-64" />
-          </h1>
+              <h1 className="font-display mt-7 text-4xl leading-[1.15] sm:text-5xl lg:text-[3.4rem]">
+                HAM is a group of friends who make things on the internet.
+              </h1>
+            </div>
 
-          <p className="font-display mt-12 text-3xl leading-[1.25] sm:text-4xl md:text-5xl">
-            HAM is a group of friends who make things on the internet.
-          </p>
+            {/*
+             * `min-h-0` is load-bearing on the phone layout: a flex item's
+             * default minimum is its content, and without this the stage
+             * refuses to shrink and pushes the scroll cue off the viewport the
+             * hero is supposed to fit inside.
+             */}
+            <div className="flex min-h-0 flex-1 flex-col justify-center lg:h-[70svh] lg:flex-none">
+              <PuffScene className="min-h-0 w-full flex-1 lg:h-full" />
+            </div>
+          </div>
 
-          <p className="mt-10 flex items-baseline gap-3 text-sm font-bold tracking-[0.16em] text-muted uppercase">
+          <p className="mt-4 flex shrink-0 items-baseline gap-3 text-sm font-bold tracking-[0.16em] text-muted uppercase">
             {/*
              * Baseline alignment keeps the cue on the first line when the label
              * wraps; the 1px lift optically centers the arrow against the
@@ -48,7 +62,7 @@ export default function Home() {
         <section
           id="things"
           aria-labelledby="things-heading"
-          className="mt-20 sm:mt-28"
+          className="mt-16 sm:mt-24"
         >
           <h2
             id="things-heading"

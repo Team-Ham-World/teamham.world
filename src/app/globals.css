@@ -26,6 +26,17 @@
   --font-display: var(--font-ham-display), system-ui, "Arial Black", sans-serif;
   --font-body: var(--font-ham-body), Verdana, system-ui, sans-serif;
 
+  /*
+   * Third family, and a deliberate exception to BRAND.md §2's "exactly two".
+   * The hero mascot is drawn out of characters, and character art only holds
+   * its shape on a grid where every glyph occupies the same cell — neither
+   * Bricolage nor Atkinson does. This is the platform's own monospace, so it
+   * adds no payload, and it is scoped to the mascot alone: no heading, label,
+   * or run of copy is ever set in it.
+   */
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
+    "DejaVu Sans Mono", monospace;
+
   /* Scroll cue nudge — frozen by the reduced-motion block below. */
   --animate-nudge: nudge 2.6s ease-in-out infinite;
 
@@ -48,6 +59,19 @@
 
 :root {
   color-scheme: light;
+
+  /*
+   * Height of the site header, so the hero can be exactly one viewport minus
+   * the header above it. Tracks SiteNav's own box: the wordmark, its py-4 pair,
+   * and the 2px rule under it.
+   */
+  --nav-height: calc(4.75rem + 2px);
+}
+
+@media (min-width: 40rem) {
+  :root {
+    --nav-height: calc(5.25rem + 2px);
+  }
 }
 
 body {
