@@ -3,107 +3,73 @@
 import { useEffect, useRef } from "react";
 
 import { renderPuff } from "@/lib/puff/render";
+import {
+  appendPuffStamp,
+  createPuffStamp,
+  type PuffStamp,
+} from "@/lib/puff/stamp";
 
 /**
- * The Puff, rendered live into two stacked `<pre>` layers.
+ * Puff is rendered live into two stacked `<pre>` layers.
  *
- * React owns the markup and nothing else. The animation loop writes straight to
- * `textContent` on two nodes it holds refs to, because the alternative — a
- * state update per frame — would ask React to reconcile a few thousand
- * characters thirty times a second to produce a change it cannot see anyway.
+ * React owns the markup and nothing else. The animation loop writes straight
+ * to `textContent`, because reconciling several thousand characters thirty
+ * times a second would add work without changing what the browser paints.
  *
- * The Puff does not spin. It rests turned toward the headline and follows the
- * pointer from there, and that is the whole of it: it is an illustration that
- * looks at you, not a control. Nothing the visitor does can leave it facing
- * away from the room.
+ * On desktop, ten clicks reveal the deliberately broken copy machine: the
+ * current frame is rasterised once and the hero becomes an event-painted stamp
+ * pad. It has no simulation and no animation loop after activation.
  */
 
-/**
- * Cells rendered per frame, which is the real cost knob: a cell that misses the
- * mascot is retired by the bounding-sphere test in a dozen operations, so cost
- * tracks the count rather than the area of the screen. The character size is
- * then solved backwards from this so a large monitor and a phone do the same
- * amount of work — the art always fills its box, and only the grain changes.
- */
+/** Cells rendered per frame; the main cost knob for the live mascot. */
 const CELL_BUDGET = 11500;
 const CELL_BUDGET_NARROW = 5000;
 const NARROW_WIDTH = 640;
 
-/*
- * Quality governor.
- *
- * The budget above is what the mascot is *designed* at, and on a current
- * machine it costs about ten milliseconds a frame. On a laptop four times
- * slower it costs forty, which pins the main thread and takes scrolling and
- * every other interaction on the page down with it — for a decorative animal
- * in the corner of a hero. So the grid is not fixed: the loop times its own
- * render, and a machine that cannot keep up gets a coarser one until it can.
- *
- * It only ever steps down. Stepping back up on a fast frame would oscillate
- * around the threshold and the visitor would watch the mascot pulse between two
- * resolutions, which is far worse than simply being slightly coarse.
- */
+/* The governor only steps down, avoiding visible resolution oscillation. */
 const RENDER_BUDGET_MS = 15;
 const QUALITY_STEP = 0.7;
 const MIN_CELLS = 3200;
-/** Consecutive slow frames before stepping down; absorbs one-off stalls. */
 const SLOW_FRAMES_BEFORE_STEP = 8;
-/** Frames ignored at startup, while the JIT is still warming up on this code. */
 const WARMUP_FRAMES = 12;
 
-/**
- * Rendering is capped well under the display rate; ASCII does not need 60fps.
- *
- * Deliberately a little under a two-frame interval on a 60Hz display rather
- * than exactly 1000/30. At exactly 33.3ms the gate lands on the same side of
- * the comparison as vsync itself and lets frames through every second callback
- * and then every third, which beats visibly at around 24fps. Undershooting the
- * interval makes every second callback pass cleanly.
- */
+/** ASCII does not need the display's full refresh rate. */
 const FRAME_MS = 1000 / 33;
 
-/** Character count the cell probe measures across, for an averaged advance. */
 const PROBE_COLS = 40;
-/** Used if the probe cannot measure an advance (fonts still loading). */
 const FALLBACK_ADVANCE = 0.6;
-
-/**
- * Line height, as a fraction of font size. Imposed rather than measured.
- *
- * A `<pre>` inherits a line height around 1.5, which makes a character cell
- * two and a half times taller than it is wide. The projection can correct the
- * *proportions* of a model drawn on cells that shape, but it cannot buy back
- * the rows: at a fixed cell budget, tall cells spend the budget on columns and
- * leave far too few rows to hold a curve, and the mascot comes out faceted.
- * Roughly square cells spend it evenly. Some vertical overlap is wanted — the
- * heavy end of the ramp closes up into solid mass while the light end stays
- * open, which deepens the very contrast the ramp exists to draw. Not so much
- * overlap, though, that a run of colons down one column fuses into a dotted
- * rule; the coat then reads as ruled paper rather than as fur.
- */
 const CELL_LINE_RATIO = 0.74;
 
-/**
- * Resting yaw: turned toward the headline it shares the hero with, rather than
- * staring straight out of the page. Everything the pointer does is a deviation
- * from here, and it always settles back to it.
- */
-const REST_YAW = -0.34;
+/** A slight turn toward the headline, without hiding the far eye. */
+const REST_YAW = -0.12;
+const LOOK_YAW = 0.42;
+const LOOK_PITCH = 0.24;
+const LOOK_RESPONSE = 7.5;
+const LOOK_DEPTH_RATIO = 1.15;
 
-/** How far the Puff will turn to follow a pointer, in radians. */
-const LOOK_YAW = 0.5;
-const LOOK_PITCH = 0.3;
-/** Fraction of the remaining distance the head covers each frame. */
-const LOOK_EASE = 0.07;
-
-/** Idle sway, so a Puff nobody is pointing at is still alive. */
-const SWAY_AMPLITUDE = 0.11;
+const SWAY_AMPLITUDE = 0.06;
 const SWAY_SPEED = 0.5;
 const BOB_AMPLITUDE = 0.05;
 const BOB_SPEED = 1.7;
 
 const BLINK_PERIOD = 4.6;
 const BLINK_SHUT = 0.14;
+
+const EASTER_EGG_CLICKS = 10;
+const STAMP_PIXEL_RATIO_LIMIT = 1.5;
+const STAMP_PREVIEW_SCALE = 0.31;
+
+const INITIAL_PRINTS = [
+  { x: 0.2, y: 0.3, scale: 1.32, opacity: 0.68 },
+  { x: 0.5, y: 0.68, scale: 1.15, opacity: 0.62 },
+  { x: 0.79, y: 0.33, scale: 1.38, opacity: 0.7 },
+] as const;
+
+interface StampSource {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+}
 
 /** 1 with the eyes open, near 0 with them shut, via a brief two-step close. */
 function blinkAt(time: number): number {
@@ -113,80 +79,300 @@ function blinkAt(time: number): number {
   return 1;
 }
 
-/**
- * Character advance width of whatever monospace font actually resolved, as a
- * fraction of the font size.
- *
- * Measured rather than assumed because the stack ends in `monospace`, and the
- * font behind that keyword differs by platform — an advance taken on trust is
- * wrong by a few percent on any machine that resolved a different one, which
- * over sixty columns is a visibly cropped or short-measured mascot.
- */
+/** Character advance of the monospace font that actually resolved. */
 function measureAdvance(pre: HTMLPreElement): number {
   const probe = document.createElement("span");
   probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre";
   probe.textContent = "0".repeat(PROBE_COLS);
   pre.appendChild(probe);
 
-  const fontSize = parseFloat(getComputedStyle(pre).fontSize) || 16;
-  const advance = probe.getBoundingClientRect().width / PROBE_COLS / fontSize;
+  const measuredFontSize = parseFloat(getComputedStyle(pre).fontSize) || 16;
+  const advance =
+    probe.getBoundingClientRect().width / PROBE_COLS / measuredFontSize;
   probe.remove();
 
   return advance > 0 ? advance : FALLBACK_ADVANCE;
 }
 
-export function PuffScene({ className }: { className?: string }) {
+export function PuffScene({
+  anchorId,
+  className,
+}: {
+  anchorId: string;
+  className?: string;
+}) {
   const stageRef = useRef<HTMLDivElement>(null);
+  const mascotRef = useRef<HTMLDivElement>(null);
   const inkRef = useRef<HTMLPreElement>(null);
   const accentRef = useRef<HTMLPreElement>(null);
+  const stampCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const stage = stageRef.current;
+    const mascot = mascotRef.current;
     const ink = inkRef.current;
     const accent = accentRef.current;
-    if (!stage || !ink || !accent) return;
+    const stampCanvas = stampCanvasRef.current;
+    const anchor = document.getElementById(anchorId);
+    if (!stage || !mascot || !ink || !accent || !stampCanvas || !anchor) {
+      return;
+    }
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const desktopEasterEgg = window.matchMedia(
+      "(min-width: 1024px) and (hover: hover) and (pointer: fine)",
+    );
+    const initialAriaLabel = stage.getAttribute("aria-label");
 
-    /* Grid, recomputed whenever the stage resizes or the governor steps down. */
     let cols = 0;
     let rows = 0;
     let cellAspect = 1;
-    /* Keyed on the viewport, not the stage. The stage is one column of a
-       two-column hero and is narrow on a desktop too; what the smaller budget
-       is actually for is a smaller machine. */
+    let cellWidth = 0;
+    let cellHeight = 0;
+    let fontSize = 0;
     let cellBudget =
       window.innerWidth < NARROW_WIDTH ? CELL_BUDGET_NARROW : CELL_BUDGET;
     let slowFrames = 0;
     let framesDrawn = 0;
+    let lastInk = "";
+    let lastAccent = "";
+    let squash = 0;
+    let easterEggClicks = 0;
 
-    /* Gaze. Both are offsets from REST_YAW / level, eased toward the pointer. */
-    let lookYaw = 0;
+    /* Gaze targets are absolute directions from Puff's own centre. */
+    let lookYaw = REST_YAW;
     let lookPitch = 0;
-    let targetYaw = 0;
+    let targetYaw = REST_YAW;
     let targetPitch = 0;
+    let pointerActive = false;
+    let pointerEngagement = 0;
+    let mascotCenterPageX = 0;
+    let mascotCenterPageY = 0;
+    let lookDepth = 1;
+
+    /* The stamp pad is a tiny retained display list painted only on events. */
+    let stampMode = false;
+    let stampContext: CanvasRenderingContext2D | null = null;
+    let stampSource: StampSource | null = null;
+    let stampPageLeft = 0;
+    let stampPageTop = 0;
+    let stampWidth = 0;
+    let stampHeight = 0;
+    let stampSerial = 0;
+    const stamps: PuffStamp[] = [];
+    let isStamping = false;
+    let lastStampedClientX = 0;
+    let lastStampedClientY = 0;
+    let lastPointerClientX = 0;
+    let lastPointerClientY = 0;
+    let pointerSeen = false;
 
     let onScreen = true;
     let dirty = true;
     let lastFrame = 0;
+    let lastDraw = 0;
     let frameHandle = 0;
+    let resizeFrameHandle = 0;
+    let previewFrameHandle = 0;
     const started = performance.now();
 
-    function resize() {
+    function configureStampCanvas(): boolean {
       const box = stage!.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) return false;
+
+      const pixelRatio = Math.min(
+        window.devicePixelRatio || 1,
+        STAMP_PIXEL_RATIO_LIMIT,
+      );
+      stampPageLeft = box.left + window.scrollX;
+      stampPageTop = box.top + window.scrollY;
+      stampWidth = box.width;
+      stampHeight = box.height;
+      stampCanvas!.width = Math.max(1, Math.round(box.width * pixelRatio));
+      stampCanvas!.height = Math.max(1, Math.round(box.height * pixelRatio));
+      stampContext = stampCanvas!.getContext("2d", {
+        alpha: true,
+        desynchronized: true,
+      });
+      if (!stampContext) return false;
+
+      stampContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      stampContext.imageSmoothingEnabled = true;
+      return true;
+    }
+
+    function captureStampSource(): StampSource | null {
+      const box = mascot!.getBoundingClientRect();
+      if (!lastInk || box.width < 1 || box.height < 1) return null;
+
+      const pixelRatio = Math.min(
+        window.devicePixelRatio || 1,
+        STAMP_PIXEL_RATIO_LIMIT,
+      );
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(box.width * pixelRatio));
+      canvas.height = Math.max(1, Math.round(box.height * pixelRatio));
+      const context = canvas.getContext("2d", { alpha: true });
+      if (!context) return null;
+
+      const inkStyle = getComputedStyle(ink!);
+      const accentStyle = getComputedStyle(accent!);
+      context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+      context.font = `${inkStyle.fontStyle} ${inkStyle.fontWeight} ${fontSize}px ${inkStyle.fontFamily}`;
+      context.textAlign = "left";
+      context.textBaseline = "top";
+
+      context.fillStyle = inkStyle.color;
+      for (const [row, line] of lastInk.split("\n").entries()) {
+        context.fillText(line, 0, row * cellHeight);
+      }
+      context.fillStyle = accentStyle.color;
+      for (const [row, line] of lastAccent.split("\n").entries()) {
+        context.fillText(line, 0, row * cellHeight);
+      }
+
+      return { canvas, width: box.width, height: box.height };
+    }
+
+    function drawStamp(stamp: PuffStamp) {
+      if (!stampContext || !stampSource) return;
+
+      stampContext.save();
+      stampContext.translate(stamp.x * stampWidth, stamp.y * stampHeight);
+      stampContext.rotate(stamp.rotation);
+      stampContext.scale(stamp.scale, stamp.scale);
+
+      /* A faint second strike gives every copy a dry, double-fed edge. */
+      stampContext.globalAlpha = stamp.opacity * 0.2;
+      stampContext.drawImage(
+        stampSource.canvas,
+        -stampSource.width / 2 + stamp.ghostShiftX,
+        -stampSource.height / 2 + stamp.ghostShiftY,
+        stampSource.width,
+        stampSource.height,
+      );
+      stampContext.globalAlpha = stamp.opacity;
+      stampContext.drawImage(
+        stampSource.canvas,
+        -stampSource.width / 2,
+        -stampSource.height / 2,
+        stampSource.width,
+        stampSource.height,
+      );
+      stampContext.restore();
+    }
+
+    function redrawStamps() {
+      if (!stampContext) return;
+      stampContext.clearRect(0, 0, stampWidth, stampHeight);
+      for (const stamp of stamps) drawStamp(stamp);
+    }
+
+    function enqueueStamp(
+      x: number,
+      y: number,
+      scaleMultiplier = 1,
+      opacityMultiplier = 1,
+    ) {
+      if (!stampSource) return;
+
+      const stamp = createPuffStamp(
+        stampSerial++,
+        x,
+        y,
+        scaleMultiplier,
+        opacityMultiplier,
+      );
+      const halfWidth = (stampSource.width * stamp.scale) / 2;
+      const halfHeight = (stampSource.height * stamp.scale) / 2;
+      const centerX = Math.max(
+        Math.min(halfWidth, stampWidth / 2),
+        Math.min(stamp.x * stampWidth, stampWidth - halfWidth),
+      );
+      const centerY = Math.max(
+        Math.min(halfHeight, stampHeight / 2),
+        Math.min(stamp.y * stampHeight, stampHeight - halfHeight),
+      );
+      stamp.x = centerX / stampWidth;
+      stamp.y = centerY / stampHeight;
+      appendPuffStamp(stamps, stamp);
+      stage!.dataset.puffStampCount = String(stamps.length);
+    }
+
+    function stampAtPointer(clientX: number, clientY: number) {
+      const x = clientX + window.scrollX - stampPageLeft;
+      const y = clientY + window.scrollY - stampPageTop;
+      if (
+        x < 0 ||
+        x > stampWidth ||
+        y < 0 ||
+        y > stampHeight
+      ) {
+        return false;
+      }
+
+      enqueueStamp(x / stampWidth, y / stampHeight);
+      redrawStamps();
+      lastStampedClientX = clientX;
+      lastStampedClientY = clientY;
+      return true;
+    }
+
+    function positionStampPreview(clientX: number, clientY: number): boolean {
+      if (!stampMode || !stampSource) return false;
+      const x = clientX + window.scrollX - stampPageLeft;
+      const y = clientY + window.scrollY - stampPageTop;
+      const inside =
+        x >= 0 && x <= stampWidth && y >= 0 && y <= stampHeight;
+      if (!inside) {
+        mascot!.style.visibility = "hidden";
+        return false;
+      }
+
+      const turn = (x / stampWidth - 0.5) * 5;
+      mascot!.style.transform = `translate3d(${x - stampSource.width / 2}px, ${y - stampSource.height / 2}px, 0) rotate(${turn}deg) scale(${STAMP_PREVIEW_SCALE})`;
+      mascot!.style.visibility = "visible";
+      return true;
+    }
+
+    function queueStampPreview() {
+      if (previewFrameHandle !== 0) return;
+      previewFrameHandle = requestAnimationFrame(() => {
+        previewFrameHandle = 0;
+        positionStampPreview(lastPointerClientX, lastPointerClientY);
+      });
+    }
+
+    function resize() {
+      const stageBox = stage!.getBoundingClientRect();
+      const box = anchor!.getBoundingClientRect();
       if (box.width < 1 || box.height < 1) return;
+
+      if (stampMode) {
+        if (configureStampCanvas()) redrawStamps();
+        if (pointerSeen) {
+          positionStampPreview(lastPointerClientX, lastPointerClientY);
+        }
+        return;
+      }
+
+      mascot!.style.left = `${box.left - stageBox.left}px`;
+      mascot!.style.top = `${box.top - stageBox.top}px`;
+      mascot!.style.width = `${box.width}px`;
+      mascot!.style.height = `${box.height}px`;
+
+      /* Page coordinates avoid a layout read on every pointer event. */
+      mascotCenterPageX = box.left + window.scrollX + box.width / 2;
+      mascotCenterPageY = box.top + window.scrollY + box.height / 2;
+      lookDepth = Math.max(box.width, box.height) * LOOK_DEPTH_RATIO;
 
       const advance = measureAdvance(ink!);
       cellAspect = advance / CELL_LINE_RATIO;
-
-      /* Solve the cell width that lands the grid on the budget:
-         cols * rows = (w / cw) * (h * aspect / cw) = budget. */
-      const cellWidth = Math.sqrt(
+      cellWidth = Math.sqrt(
         (box.width * box.height * cellAspect) / cellBudget,
       );
-      const fontSize = cellWidth / advance;
-      const cellHeight = fontSize * CELL_LINE_RATIO;
-
+      fontSize = cellWidth / advance;
+      cellHeight = fontSize * CELL_LINE_RATIO;
       cols = Math.max(8, Math.floor(box.width / cellWidth));
       rows = Math.max(8, Math.floor(box.height / cellHeight));
 
@@ -202,11 +388,22 @@ export function PuffScene({ className }: { className?: string }) {
       const still = reduceMotion.matches;
 
       if (!still) {
-        lookYaw += (targetYaw - lookYaw) * LOOK_EASE;
-        lookPitch += (targetPitch - lookPitch) * LOOK_EASE;
+        const elapsed =
+          lastDraw === 0 ? FRAME_MS / 1000 : (now - lastDraw) / 1000;
+        const ease = 1 - Math.exp(-LOOK_RESPONSE * Math.min(elapsed, 0.1));
+        lookYaw += (targetYaw - lookYaw) * ease;
+        lookPitch += (targetPitch - lookPitch) * ease;
+        pointerEngagement +=
+          ((pointerActive ? 1 : 0) - pointerEngagement) * ease;
+        squash *= Math.exp(-9 * elapsed);
       }
+      lastDraw = now;
 
-      const sway = still ? 0 : Math.sin(time * SWAY_SPEED) * SWAY_AMPLITUDE;
+      const sway = still
+        ? 0
+        : Math.sin(time * SWAY_SPEED) *
+          SWAY_AMPLITUDE *
+          (1 - pointerEngagement * 0.8);
       const startedRender = performance.now();
       const frame = renderPuff(
         cols,
@@ -215,18 +412,17 @@ export function PuffScene({ className }: { className?: string }) {
         {
           time: still ? 1.2 : time,
           bob: still ? 0 : Math.sin(time * BOB_SPEED) * BOB_AMPLITUDE,
-          squash: 0,
+          squash,
           blink: still ? 1 : blinkAt(time),
         },
-        { yaw: REST_YAW + sway + lookYaw, pitch: lookPitch },
+        { yaw: lookYaw + sway, pitch: lookPitch },
       );
 
       ink!.textContent = frame.ink;
       accent!.textContent = frame.accent;
+      lastInk = frame.ink;
+      lastAccent = frame.accent;
 
-      /* Measured around the marcher alone, not the whole callback: the two
-         text writes that follow are the browser's cost, not ours, and are not
-         something a smaller grid would meaningfully change. */
       const cost = performance.now() - startedRender;
       if (++framesDrawn > WARMUP_FRAMES && cellBudget > MIN_CELLS) {
         slowFrames = cost > RENDER_BUDGET_MS ? slowFrames + 1 : 0;
@@ -239,11 +435,13 @@ export function PuffScene({ className }: { className?: string }) {
     }
 
     function tick(now: number) {
+      if (stampMode) {
+        frameHandle = 0;
+        return;
+      }
       frameHandle = requestAnimationFrame(tick);
       if (!onScreen || document.hidden || cols === 0) return;
 
-      /* Under reduced motion the Puff holds one pose, so a frame is only drawn
-         when the layout has actually changed under it. */
       if (reduceMotion.matches && !dirty) return;
       if (now - lastFrame < FRAME_MS) return;
 
@@ -252,33 +450,160 @@ export function PuffScene({ className }: { className?: string }) {
       draw(now);
     }
 
-    /*
-     * Aiming the gaze off the viewport rather than off the stage's own box is
-     * deliberate: it needs no layout read, so pointer movement never forces a
-     * reflow against the text we are rewriting every frame.
-     */
-    function onPointerMove(event: PointerEvent) {
-      targetYaw = (event.clientX / window.innerWidth - 0.5) * 2 * LOOK_YAW;
-      targetPitch = (event.clientY / window.innerHeight - 0.5) * 2 * LOOK_PITCH;
+    function queueResize() {
+      if (resizeFrameHandle !== 0) return;
+      resizeFrameHandle = requestAnimationFrame(() => {
+        resizeFrameHandle = 0;
+        resize();
+      });
     }
 
-    /* A pointer that has left the window is not somewhere to keep staring. */
-    function onPointerOut(event: PointerEvent) {
-      if (event.relatedTarget === null) {
-        targetYaw = 0;
-        targetPitch = 0;
+    function startStampPad(clientX: number, clientY: number): boolean {
+      if (stampMode) return true;
+      const source = captureStampSource();
+      if (!source || !configureStampCanvas()) return false;
+
+      stampSource = source;
+      stampMode = true;
+      stampCanvas!.hidden = false;
+      mascot!.style.left = "0";
+      mascot!.style.top = "0";
+      mascot!.style.width = `${source.width}px`;
+      mascot!.style.height = `${source.height}px`;
+      mascot!.style.opacity = "0.24";
+      mascot!.style.transformOrigin = "50% 50%";
+      mascot!.style.zIndex = "1";
+
+      for (const print of INITIAL_PRINTS) {
+        enqueueStamp(print.x, print.y, print.scale, print.opacity);
+      }
+      redrawStamps();
+      if (!reduceMotion.matches) {
+        stampCanvas!.animate(
+          [
+            { opacity: 0 },
+            { opacity: 0.9, offset: 0.34 },
+            { opacity: 0.45, offset: 0.58 },
+            { opacity: 1 },
+          ],
+          { duration: 260, easing: "steps(3, end)" },
+        );
+      }
+
+      stage!.dataset.puffMode = "stamp-pad";
+      stage!.setAttribute(
+        "aria-label",
+        "Puff stamp pad: click or drag through the hero to print ASCII copies.",
+      );
+      cancelAnimationFrame(frameHandle);
+      frameHandle = 0;
+      positionStampPreview(clientX, clientY);
+      return true;
+    }
+
+    function onPointerMove(event: PointerEvent) {
+      if (event.pointerType === "touch") return;
+      lastPointerClientX = event.clientX;
+      lastPointerClientY = event.clientY;
+      pointerSeen = true;
+
+      if (stampMode) {
+        const x = event.clientX + window.scrollX - stampPageLeft;
+        const y = event.clientY + window.scrollY - stampPageTop;
+        const inside =
+          x >= 0 && x <= stampWidth && y >= 0 && y <= stampHeight;
+        queueStampPreview();
+        const dragSpacing = Math.max(
+          48,
+          (stampSource?.width ?? 0) * STAMP_PREVIEW_SCALE * 0.32,
+        );
+        if (
+          isStamping &&
+          inside &&
+          Math.hypot(
+            event.clientX - lastStampedClientX,
+            event.clientY - lastStampedClientY,
+          ) >= dragSpacing
+        ) {
+          stampAtPointer(event.clientX, event.clientY);
+        }
+        return;
+      }
+
+      const dx = event.clientX + window.scrollX - mascotCenterPageX;
+      const dy = event.clientY + window.scrollY - mascotCenterPageY;
+      targetYaw = Math.max(
+        -LOOK_YAW,
+        Math.min(LOOK_YAW, Math.atan2(dx, lookDepth)),
+      );
+      targetPitch = Math.max(
+        -LOOK_PITCH,
+        Math.min(LOOK_PITCH, Math.atan2(dy, lookDepth)),
+      );
+      pointerActive = true;
+    }
+
+    function onPointerDown(event: PointerEvent) {
+      if (!stampMode || event.pointerType === "touch" || event.button !== 0) {
+        return;
+      }
+      if (stampAtPointer(event.clientX, event.clientY)) {
+        /* The hero becomes a pad in this mode; do not select headline text
+           underneath it while the visitor drags a run of prints. */
+        event.preventDefault();
+        isStamping = true;
       }
     }
 
-    /* Switching the setting on or off has to force one frame: coming out of
-       reduced motion there is nothing else to restart the loop, and going into
-       it the last drawn frame may be mid-bob. */
+    function stopStamping() {
+      isStamping = false;
+    }
+
+    function onStageClick(event: MouseEvent) {
+      if (stampMode || !desktopEasterEgg.matches || !lastInk) return;
+
+      const box = mascot!.getBoundingClientRect();
+      const col = Math.floor((event.clientX - box.left) / cellWidth);
+      const row = Math.floor((event.clientY - box.top) / cellHeight);
+      if (col < 0 || col >= cols || row < 0 || row >= rows) return;
+
+      const textIndex = row * (cols + 1) + col;
+      if (lastInk[textIndex] === " " && lastAccent[textIndex] === " ") return;
+
+      squash = Math.min(1, squash + 0.32);
+      easterEggClicks++;
+      if (
+        easterEggClicks >= EASTER_EGG_CLICKS &&
+        !startStampPad(event.clientX, event.clientY)
+      ) {
+        easterEggClicks = EASTER_EGG_CLICKS - 1;
+      }
+    }
+
+    function resetPointer() {
+      stopStamping();
+      if (stampMode) {
+        cancelAnimationFrame(previewFrameHandle);
+        previewFrameHandle = 0;
+        mascot!.style.visibility = "hidden";
+        return;
+      }
+      targetYaw = REST_YAW;
+      targetPitch = 0;
+      pointerActive = false;
+    }
+
+    function onPointerOut(event: PointerEvent) {
+      if (event.relatedTarget === null) resetPointer();
+    }
+
     const onMotionPreferenceChange = () => {
-      dirty = true;
+      if (!stampMode) dirty = true;
     };
 
-    const observer = new ResizeObserver(resize);
+    const observer = new ResizeObserver(queueResize);
     observer.observe(stage);
+    observer.observe(anchor);
     const visibility = new IntersectionObserver(
       ([entry]) => {
         onScreen = entry.isIntersecting;
@@ -289,52 +614,71 @@ export function PuffScene({ className }: { className?: string }) {
 
     resize();
     window.addEventListener("pointermove", onPointerMove, { passive: true });
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("pointerup", stopStamping, { passive: true });
+    window.addEventListener("pointercancel", stopStamping, { passive: true });
     window.addEventListener("pointerout", onPointerOut, { passive: true });
+    window.addEventListener("blur", resetPointer);
+    window.addEventListener("resize", queueResize, { passive: true });
+    window.addEventListener("click", onStageClick);
     reduceMotion.addEventListener("change", onMotionPreferenceChange);
     frameHandle = requestAnimationFrame(tick);
 
     return () => {
       cancelAnimationFrame(frameHandle);
+      cancelAnimationFrame(resizeFrameHandle);
+      cancelAnimationFrame(previewFrameHandle);
       observer.disconnect();
       visibility.disconnect();
       window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", stopStamping);
+      window.removeEventListener("pointercancel", stopStamping);
       window.removeEventListener("pointerout", onPointerOut);
+      window.removeEventListener("blur", resetPointer);
+      window.removeEventListener("resize", queueResize);
+      window.removeEventListener("click", onStageClick);
       reduceMotion.removeEventListener("change", onMotionPreferenceChange);
+
+      mascot.style.visibility = "";
+      mascot.style.opacity = "";
+      mascot.style.transform = "";
+      mascot.style.transformOrigin = "";
+      mascot.style.zIndex = "";
+      stampCanvas.hidden = true;
+      if (initialAriaLabel === null) stage.removeAttribute("aria-label");
+      else stage.setAttribute("aria-label", initialAriaLabel);
+      delete stage.dataset.puffMode;
+      delete stage.dataset.puffStampCount;
     };
-  }, []);
+  }, [anchorId]);
 
   return (
     <div
       ref={stageRef}
       role="img"
       aria-label="HAM's mascot: a small round creature covered in fur, with a loop of red marker curling off its head."
-      className={`relative overflow-hidden select-none ${className ?? ""}`}
+      className={`overflow-hidden select-none ${className ?? ""}`}
     >
-      {/*
-        Two layers, exactly overlapping, so a frame reaches the DOM as two text
-        writes. Colouring per character would mean a span per cell — a few
-        thousand elements rebuilt thirty times a second.
-
-        Both are taken out of flow, and the ink layer has to be as much as the
-        accent one. A `<pre>` of `white-space: pre` has a min-content width of
-        its longest line, and a grid or flex item's automatic minimum size
-        honours that — so an in-flow layer lets the art dictate the width of the
-        column it is sitting in. That is a feedback loop, because the column's
-        width is the input the grid was solved from: the governor enlarges the
-        characters, the wider line widens the column, the ResizeObserver sees a
-        bigger stage and solves for more columns again. Out of flow, the stage is
-        sized purely by its parent and the loop cannot close.
-      */}
-      <pre
-        ref={inkRef}
+      <canvas
+        ref={stampCanvasRef}
+        hidden
         aria-hidden="true"
-        className="font-mono pointer-events-none absolute inset-0 m-0 text-ink"
+        className="pointer-events-none absolute inset-0 h-full w-full"
       />
-      <pre
-        ref={accentRef}
-        aria-hidden="true"
-        className="font-mono pointer-events-none absolute inset-0 m-0 text-decorative-red"
-      />
+      {/* The two text layers stay live before discovery and become the preview. */}
+      <div ref={mascotRef} className="pointer-events-none absolute">
+        <pre
+          ref={inkRef}
+          aria-hidden="true"
+          className="font-mono absolute inset-0 m-0 text-ink"
+        />
+        <pre
+          ref={accentRef}
+          aria-hidden="true"
+          className="font-mono absolute inset-0 m-0 text-decorative-red"
+        />
+      </div>
     </div>
   );
 }
