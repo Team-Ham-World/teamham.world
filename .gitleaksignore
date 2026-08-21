@@ -1,0 +1,31 @@
+# Reviewed synthetic test fixtures introduced by the initial auth implementation.
+# Exact fingerprints preserve detection for every future value and commit.
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:discord-client-id:6
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:discord-client-id:8
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:discord-client-id:9
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:discord-client-id:18
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:discord-client-id:20
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:discord-client-id:21
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:generic-api-key:4
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:generic-api-key:5
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:generic-api-key:16
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/helpers/test-fixtures.ts:generic-api-key:17
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/unit/crypto.test.ts:generic-api-key:22
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/unit/crypto.test.ts:generic-api-key:227
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/unit/config.test.ts:generic-api-key:147
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/unit/config.test.ts:generic-api-key:157
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/unit/game-oauth.test.ts:generic-api-key:37
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/unit/game-oauth.test.ts:generic-api-key:419
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/db-queries.test.ts:discord-client-id:1272
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/db-queries.test.ts:discord-client-id:1274
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/db-queries.test.ts:discord-client-id:1275
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/db-queries.test.ts:discord-client-id:2245
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/db-queries.test.ts:discord-client-id:2247
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/db-queries.test.ts:discord-client-id:2248
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/oauth-flow.test.ts:discord-client-id:671
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/oauth-flow.test.ts:discord-client-id:715
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/oauth-flow.test.ts:discord-client-id:755
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/oauth-flow.test.ts:discord-client-id:791
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/oauth-flow.test.ts:discord-client-id:861
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/oauth-flow.test.ts:discord-client-id:903
+17a5646b1b4a946d021786aed3f8cda697dd48c5:tests/integration/oauth-flow.test.ts:discord-client-id:942
