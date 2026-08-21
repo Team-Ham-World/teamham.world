@@ -16,8 +16,13 @@ export default function Home() {
          * the mascot is the whole of the first impression and the shelf begins
          * on the first scroll.
          */}
-        <section className="flex min-h-[calc(100svh-var(--nav-height))] flex-col pb-6">
-          <div className="flex flex-1 flex-col gap-6 pt-8 lg:grid lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-10 lg:pt-0">
+        <section className="flex min-h-[calc(100svh-var(--nav-height))] flex-col overflow-hidden pb-6">
+          <div className="relative flex flex-1 flex-col gap-6 overflow-hidden pt-8 lg:grid lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-10 lg:pt-0">
+            <PuffScene
+              anchorId="home-puff-anchor"
+              className="pointer-events-none absolute inset-0 z-10"
+            />
+
             <div className="max-w-2xl">
               {/* Torn-tag eyebrow. Both halves are facts stated further down the
                   page: a private group, whose shelf is the public part. */}
@@ -36,9 +41,11 @@ export default function Home() {
              * refuses to shrink and pushes the scroll cue off the viewport the
              * hero is supposed to fit inside.
              */}
-            <div className="flex min-h-0 flex-1 flex-col justify-center lg:h-[70svh] lg:flex-none">
-              <PuffScene className="min-h-0 w-full flex-1 lg:h-full" />
-            </div>
+            <div
+              id="home-puff-anchor"
+              className="flex min-h-0 flex-1 flex-col justify-center lg:h-[70svh] lg:flex-none"
+              aria-hidden="true"
+            />
           </div>
 
           <p className="mt-4 flex shrink-0 items-baseline gap-3 text-sm font-bold tracking-[0.16em] text-muted uppercase">
