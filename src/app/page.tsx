@@ -1,4 +1,5 @@
 import { HamWordmark } from "@/components/ham-wordmark";
+import { MemberBadge } from "@/components/member-badge";
 import { ProjectShelf } from "@/components/project-shelf";
 
 /*
@@ -8,8 +9,15 @@ import { ProjectShelf } from "@/components/project-shelf";
 export default function Home() {
   return (
     <>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-20 pb-16 sm:px-8 sm:pt-28">
-        <section className="max-w-3xl">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-10 pb-16 sm:px-8 sm:pt-14">
+        {/*
+         * Resolved in the browser, not at build time: keeping the session out
+         * of the prerender is what lets this page stay static and publicly
+         * cacheable. See the component for the full reasoning.
+         */}
+        <MemberBadge />
+
+        <section className="mt-10 max-w-3xl sm:mt-14">
           {/* The wordmark is the group's own hand-drawn mark, traced to vector. */}
           <h1>
             <HamWordmark className="h-auto w-52 text-ink sm:w-64" />
@@ -19,10 +27,17 @@ export default function Home() {
             HAM is a group of friends who make things on the internet.
           </p>
 
-          <p className="mt-10 flex items-start gap-3 text-sm font-bold tracking-[0.16em] text-muted uppercase">
+          <p className="mt-10 flex items-baseline gap-3 text-sm font-bold tracking-[0.16em] text-muted uppercase">
+            {/*
+             * Baseline alignment keeps the cue on the first line when the label
+             * wraps; the 1px lift optically centers the arrow against the
+             * all-caps label, since the glyph carries ink below the baseline and
+             * the capitals do not. Offset via `top` because the nudge animation
+             * owns `transform`.
+             */}
             <span
               aria-hidden="true"
-              className="animate-nudge inline-block text-base"
+              className="animate-nudge relative -top-px inline-block text-base"
             >
               &#8595;
             </span>

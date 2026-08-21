@@ -58,7 +58,7 @@ jobs:
         run: npm run typecheck
 
       - name: Run unit and mocked integration tests
-        run: npx vitest run tests/unit tests/integration/oauth-flow.test.ts tests/integration/cache-headers.test.ts
+        run: npx vitest run tests/unit tests/integration/oauth-flow.test.ts tests/integration/cache-headers.test.ts tests/integration/session-status.test.ts
 
       - name: Run PostgreSQL integration tests
         env:

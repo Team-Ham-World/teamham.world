@@ -396,6 +396,7 @@ describe('Game Route Authorization Contract Integration Tests', () => {
           accessStatus: 'active',
           membershipStatus: 'eligible',
           expiresAt: new Date(Date.now() + 86400000).toISOString(),
+          username: 'hamfriend',
         },
       });
 
@@ -586,6 +587,7 @@ describe('Game Route Authorization Contract Integration Tests', () => {
           accessStatus: 'active',
           membershipStatus: 'eligible',
           expiresAt: new Date(Date.now() + 86400000).toISOString(),
+          username: 'hamfriend',
         },
       });
 

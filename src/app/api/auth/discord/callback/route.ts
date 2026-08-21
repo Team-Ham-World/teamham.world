@@ -238,7 +238,12 @@ export async function GET(request: Request): Promise<Response> {
 
   let dbResult;
   try {
-    dbResult = await issueLoginSession(gateResult.discordUserId, tokenHash, config.databaseUrl);
+    dbResult = await issueLoginSession(
+      gateResult.discordUserId,
+      gateResult.discordUsername,
+      tokenHash,
+      config.databaseUrl
+    );
   } catch {
     return retryableError(
       503,

@@ -19,8 +19,8 @@ function subscribeToHash(onChange: () => void) {
 /**
  * Accessible expansion control for one shelf entry.
  *
- * The only client component on the page. It receives serializable props plus
- * server-rendered children, so the details markup stays out of the JS bundle.
+ * It receives serializable props plus server-rendered children, so the details
+ * markup stays out of the JS bundle.
  *
  * Rendering is gated by `hasExpandableContent` in the shelf — this component
  * assumes it has something to show.

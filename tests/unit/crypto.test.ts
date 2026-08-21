@@ -11,6 +11,7 @@ import {
   isValidSessionToken,
   isValidTokenHash,
   isValidDiscordId,
+  isValidDiscordUsername,
   isValidUuid,
   signOAuthState,
   verifyOAuthStateCookie,
@@ -109,6 +110,24 @@ describe('lib/auth/crypto', () => {
       expect(isValidDiscordId('')).toBe(false);
       expect(isValidDiscordId(null)).toBe(false);
       expect(isValidDiscordId(undefined)).toBe(false);
+    });
+
+    it('validates Discord usernames correctly', () => {
+      expect(isValidDiscordUsername('hamfriend')).toBe(true);
+      expect(isValidDiscordUsername('ham.friend_2')).toBe(true);
+      expect(isValidDiscordUsername('Legacy_Name')).toBe(true); // pre-2023 handles
+      expect(isValidDiscordUsername('ab')).toBe(true);
+      expect(isValidDiscordUsername('x'.repeat(32))).toBe(true);
+
+      expect(isValidDiscordUsername('a')).toBe(false); // below the 2-char floor
+      expect(isValidDiscordUsername('x'.repeat(33))).toBe(false); // above the column width
+      expect(isValidDiscordUsername('has space')).toBe(false);
+      expect(isValidDiscordUsername('has@symbol')).toBe(false);
+      expect(isValidDiscordUsername('<script>x</script>')).toBe(false);
+      expect(isValidDiscordUsername('')).toBe(false);
+      expect(isValidDiscordUsername(null)).toBe(false);
+      expect(isValidDiscordUsername(undefined)).toBe(false);
+      expect(isValidDiscordUsername(12345)).toBe(false);
     });
 
     it('validates UUIDs correctly', () => {

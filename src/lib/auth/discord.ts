@@ -1,9 +1,24 @@
 import { AuthConfig } from './config';
-import { isValidDiscordId } from './crypto';
+import { isValidDiscordId, isValidDiscordUsername } from './crypto';
+
+/**
+ * Identity kept from Discord: the ID that anchors the account row, plus the
+ * username shown to the member in the UI. `username` is null whenever Discord
+ * omits it or returns a value outside the accepted shape.
+ */
+export interface DiscordIdentity {
+  id: string;
+  username: string | null;
+}
 
 export type DiscordGateResult =
-  | { status: 'eligible'; discordUserId: string }
-  | { status: 'ineligible'; reason: 'missing_role' | 'unknown_member'; discordUserId: string }
+  | { status: 'eligible'; discordUserId: string; discordUsername: string | null }
+  | {
+      status: 'ineligible';
+      reason: 'missing_role' | 'unknown_member';
+      discordUserId: string;
+      discordUsername: string | null;
+    }
   | { status: 'upstream_error'; error: string; httpStatus: 502 };
 
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
@@ -92,7 +107,7 @@ export async function exchangeCodeForToken(
   return data.access_token;
 }
 
-export async function fetchDiscordUserIdentity(accessToken: string): Promise<string> {
+export async function fetchDiscordUserIdentity(accessToken: string): Promise<DiscordIdentity> {
   const response = await fetch(`${DISCORD_API_BASE}/users/@me`, {
     method: 'GET',
     headers: {
@@ -111,7 +126,10 @@ export async function fetchDiscordUserIdentity(accessToken: string): Promise<str
     throw new Error('Invalid user identity payload from Discord');
   }
 
-  return data.id;
+  return {
+    id: data.id,
+    username: isValidDiscordUsername(data.username) ? data.username : null,
+  };
 }
 
 type MemberCheck =
@@ -173,8 +191,8 @@ export async function exchangeCodeAndCheckGuildRole(
     // Step 1: Exchange code for access token
     const accessToken = await exchangeCodeForToken(code, verifier, config);
 
-    // Step 2: Fetch Discord user ID (discarding all other profile fields)
-    const discordUserId = await fetchDiscordUserIdentity(accessToken);
+    // Step 2: Fetch Discord user ID and username (discarding all other profile fields)
+    const identity = await fetchDiscordUserIdentity(accessToken);
 
     // Step 3: Check guild membership and required role
     const membershipCheck = await checkGuildMembership(accessToken, config);
@@ -182,7 +200,8 @@ export async function exchangeCodeAndCheckGuildRole(
     if (membershipCheck.status === 'eligible') {
       return {
         status: 'eligible',
-        discordUserId,
+        discordUserId: identity.id,
+        discordUsername: identity.username,
       };
     }
 
@@ -190,7 +209,8 @@ export async function exchangeCodeAndCheckGuildRole(
       return {
         status: 'ineligible',
         reason: membershipCheck.reason,
-        discordUserId,
+        discordUserId: identity.id,
+        discordUsername: identity.username,
       };
     }
 

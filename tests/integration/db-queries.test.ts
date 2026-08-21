@@ -58,6 +58,7 @@ SELECT
     a.id AS account_id,
     a.access_status,
     a.membership_status,
+    a.discord_username,
     s.expires_at
 FROM public.sessions s
 JOIN public.accounts a ON s.account_id = a.id
@@ -72,13 +73,15 @@ const SQL_LOGIN_CTE = `
 WITH upsert_account AS (
     INSERT INTO public.accounts (
         discord_user_id,
+        discord_username,
         membership_status,
         access_status,
         membership_checked_at
     )
-    VALUES ($1, 'eligible', 'active', NOW())
+    VALUES ($1, $2, 'eligible', 'active', NOW())
     ON CONFLICT (discord_user_id) DO UPDATE
     SET
+        discord_username = COALESCE(EXCLUDED.discord_username, accounts.discord_username),
         membership_status = 'eligible',
         membership_checked_at = NOW(),
         updated_at = NOW()
@@ -94,7 +97,7 @@ upsert_session AS (
     )
     SELECT
         ua.id,
-        $2,
+        $3,
         NOW(),
         NOW() + INTERVAL '24 hours'
     FROM upsert_account ua
@@ -254,7 +257,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migration 0001 and 0002
+    // 2. Clean existing tables and apply migrations 0001 through 0003
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_access_tokens CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_authorization_codes CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_oauth_subjects CASCADE;`);
@@ -269,6 +272,10 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     const migration0002Path = path.resolve(__dirname, '../../migrations/0002_game_backend_authorization.sql');
     const migration0002Sql = fs.readFileSync(migration0002Path, 'utf8');
     await ownerPool.query(migration0002Sql);
+
+    const migration0003Path = path.resolve(__dirname, '../../migrations/0003_account_display_name.sql');
+    const migration0003Sql = fs.readFileSync(migration0003Path, 'utf8');
+    await ownerPool.query(migration0003Sql);
 
     // 3. Connect as runtime role
     runtimeUrl = buildRuntimeUrl(rawTestDbUrl, TEST_RUNTIME_PASSWORD);
@@ -353,6 +360,27 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       expect(err).toBeInstanceOf(Error);
       expect((err as DatabaseError).code).toBe('23505'); // unique_violation
+    });
+
+    it('enforces discord_username check constraint and allows NULL', async () => {
+      // NULL is the documented fallback when Discord gives nothing usable.
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.accounts (discord_user_id, discord_username, membership_status, access_status)
+           VALUES ($1, NULL, 'eligible', 'active')`,
+          [makeDiscordId(21)]
+        )
+      ).resolves.toBeDefined();
+
+      for (const rejected of ['a', 'has space', 'x'.repeat(33)]) {
+        await expect(
+          ownerPool.query(
+            `INSERT INTO public.accounts (discord_user_id, discord_username, membership_status, access_status)
+             VALUES ($1, $2, 'eligible', 'active')`,
+            [makeDiscordId(22), rejected]
+          )
+        ).rejects.toThrow();
+      }
     });
 
     it('enforces membership_status check constraint', async () => {
@@ -570,7 +598,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const res = await runtimePool.query<{ account_id: string; access_status: string }>(
         SQL_LOGIN_CTE,
-        [discordId, tokenHash]
+        [discordId, null, tokenHash]
       );
 
       expect(res.rowCount).toBe(1);
@@ -607,6 +635,41 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       expect(sessRes.rows[0].exact_24h).toBe(true);
     });
 
+    it('stores the display username and refreshes it on the next login', async () => {
+      const discordId = makeDiscordId(131);
+
+      await runtimePool.query(SQL_LOGIN_CTE, [discordId, 'hamfriend', makeTokenHash('a')]);
+
+      const first = await runtimePool.query<{ discord_username: string | null }>(
+        `SELECT discord_username FROM public.accounts WHERE discord_user_id = $1`,
+        [discordId]
+      );
+      expect(first.rows[0].discord_username).toBe('hamfriend');
+
+      // A renamed member gets the new handle written on re-login.
+      await runtimePool.query(SQL_LOGIN_CTE, [discordId, 'ham.friend2', makeTokenHash('b')]);
+
+      const renamed = await runtimePool.query<{ discord_username: string | null }>(
+        `SELECT discord_username FROM public.accounts WHERE discord_user_id = $1`,
+        [discordId]
+      );
+      expect(renamed.rows[0].discord_username).toBe('ham.friend2');
+    });
+
+    it('keeps the stored username when a login supplies none', async () => {
+      const discordId = makeDiscordId(132);
+
+      await runtimePool.query(SQL_LOGIN_CTE, [discordId, 'hamfriend', makeTokenHash('c')]);
+      // Discord omitted or malformed the username: COALESCE must not blank the column.
+      await runtimePool.query(SQL_LOGIN_CTE, [discordId, null, makeTokenHash('d')]);
+
+      const res = await runtimePool.query<{ discord_username: string | null }>(
+        `SELECT discord_username FROM public.accounts WHERE discord_user_id = $1`,
+        [discordId]
+      );
+      expect(res.rows[0].discord_username).toBe('hamfriend');
+    });
+
     it('atomically replaces prior session on re-login for the same user', async () => {
       const discordId = makeDiscordId(102);
       const tokenHash1 = makeTokenHash('b');
@@ -615,14 +678,14 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       // First login
       const res1 = await runtimePool.query<{ account_id: string; access_status: string }>(
         SQL_LOGIN_CTE,
-        [discordId, tokenHash1]
+        [discordId, null, tokenHash1]
       );
       const accountId1 = res1.rows[0].account_id;
 
       // Second login (e.g. from new browser/device)
       const res2 = await runtimePool.query<{ account_id: string; access_status: string }>(
         SQL_LOGIN_CTE,
-        [discordId, tokenHash2]
+        [discordId, null, tokenHash2]
       );
       const accountId2 = res2.rows[0].account_id;
 
@@ -652,7 +715,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       // Create initial active account
       const res1 = await runtimePool.query<{ account_id: string }>(
         SQL_LOGIN_CTE,
-        [discordId, tokenHash1]
+        [discordId, null, tokenHash1]
       );
       const accountId = res1.rows[0].account_id;
 
@@ -673,7 +736,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       );
 
       // Attempt login while suspended
-      const loginAttempt = await runtimePool.query(SQL_LOGIN_CTE, [discordId, tokenHash2]);
+      const loginAttempt = await runtimePool.query(SQL_LOGIN_CTE, [discordId, null, tokenHash2]);
       expect(loginAttempt.rowCount).toBe(0);
 
       // Confirm no mutations occurred
@@ -705,6 +768,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -728,6 +792,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -751,6 +816,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -770,6 +836,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -789,6 +856,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -813,6 +881,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -845,6 +914,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -881,10 +951,12 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const res1 = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId1,
+        null,
         tokenHash1,
       ]);
       const res2 = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId2,
+        null,
         tokenHash2,
       ]);
 
@@ -921,6 +993,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const accountId = loginRes.rows[0].account_id;
@@ -956,7 +1029,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       const newHash = makeTokenHash('e');
       const reLoginRes = await runtimePool.query<{ account_id: string; access_status: string }>(
         SQL_LOGIN_CTE,
-        [discordId, newHash]
+        [discordId, null, newHash]
       );
       expect(reLoginRes.rowCount).toBe(1);
       expect(reLoginRes.rows[0].account_id).toBe(accountId);
@@ -968,6 +1041,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       const loginRes = await runtimePool.query<{ account_id: string }>(SQL_LOGIN_CTE, [
         discordId,
+        null,
         tokenHash,
       ]);
       const firstAccountId = loginRes.rows[0].account_id;
@@ -992,7 +1066,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       const newHash = makeTokenHash('0');
       const reCreateRes = await runtimePool.query<{ account_id: string; access_status: string }>(
         SQL_LOGIN_CTE,
-        [discordId, newHash]
+        [discordId, null, newHash]
       );
       expect(reCreateRes.rowCount).toBe(1);
       expect(reCreateRes.rows[0].account_id).not.toBe(firstAccountId);
@@ -1000,8 +1074,8 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     });
 
     it('Runbook C: emergency session revocation removes all sessions without deleting accounts', async () => {
-      await runtimePool.query(SQL_LOGIN_CTE, [makeDiscordId(503), makeTokenHash('1')]);
-      await runtimePool.query(SQL_LOGIN_CTE, [makeDiscordId(504), makeTokenHash('2')]);
+      await runtimePool.query(SQL_LOGIN_CTE, [makeDiscordId(503), null, makeTokenHash('1')]);
+      await runtimePool.query(SQL_LOGIN_CTE, [makeDiscordId(504), null, makeTokenHash('2')]);
 
       const sessBefore = await ownerPool.query(`SELECT COUNT(*) AS c FROM public.sessions`);
       expect(Number(sessBefore.rows[0].c)).toBe(2);
@@ -1205,7 +1279,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       const discordId = makeDiscordId(701);
       const tokenHash = makeTokenHash('5');
 
-      await runtimePool.query(SQL_LOGIN_CTE, [discordId, tokenHash]);
+      await runtimePool.query(SQL_LOGIN_CTE, [discordId, null, tokenHash]);
 
       const intervalCheck = await runtimePool.query<{
         is_exact_24h: boolean;
@@ -1228,7 +1302,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       const discordId = makeDiscordId(702);
       const tokenHash = makeTokenHash('6');
 
-      await runtimePool.query(SQL_LOGIN_CTE, [discordId, tokenHash]);
+      await runtimePool.query(SQL_LOGIN_CTE, [discordId, null, tokenHash]);
 
       const timingCheck = await runtimePool.query<{
         checked_fresh: boolean;
@@ -1279,7 +1353,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         const tokenHash = makeTokenHash('7');
 
         // 1. Issue session through runtime adapter
-        const issueRes = await issueLoginSession(discordId, tokenHash);
+        const issueRes = await issueLoginSession(discordId, 'hamfriend', tokenHash);
         expect(issueRes.success).toBe(true);
         if (issueRes.success) {
           expect(issueRes.accessStatus).toBe('active');
@@ -2275,7 +2349,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     async function createMemberSession(suffix = 1) {
       const discordId = makeDiscordId(suffix);
       const sessionHash = makeTokenHash(String(suffix % 10));
-      const res = await issueLoginSession(discordId, sessionHash, runtimeUrl);
+      const res = await issueLoginSession(discordId, null, sessionHash, runtimeUrl);
       if (!res.success) throw new Error('Failed to create session');
       return { accountId: res.accountId, sessionHash, discordId };
     }
@@ -2797,7 +2871,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       // 3. Central session replacement (re-login on another device) invalidates game token
       const newSessionHash = makeTokenHash('f');
-      await issueLoginSession(session.discordId, newSessionHash, runtimeUrl);
+      await issueLoginSession(session.discordId, null, newSessionHash, runtimeUrl);
 
       const introspectAfterRelogin = await introspectGameAccessToken({
         authenticatedClientId: client.clientId,

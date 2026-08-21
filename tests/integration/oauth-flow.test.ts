@@ -674,6 +674,7 @@ describe('OAuth Flow Integration', () => {
         status: 'ineligible',
         reason: 'missing_role',
         discordUserId,
+        discordUsername: 'hamfriend',
       });
       vi.mocked(dbModule.recordIneligibleAccount).mockResolvedValueOnce({ success: true });
 
@@ -717,6 +718,7 @@ describe('OAuth Flow Integration', () => {
       vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
         status: 'eligible',
         discordUserId,
+        discordUsername: 'hamfriend',
       });
       vi.mocked(dbModule.issueLoginSession).mockResolvedValueOnce({
         success: false,
@@ -757,6 +759,7 @@ describe('OAuth Flow Integration', () => {
       vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
         status: 'eligible',
         discordUserId,
+        discordUsername: 'hamfriend',
       });
       vi.mocked(dbModule.issueLoginSession).mockRejectedValueOnce(new Error('Database connection failed'));
 
@@ -793,6 +796,7 @@ describe('OAuth Flow Integration', () => {
       vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
         status: 'eligible',
         discordUserId,
+        discordUsername: 'hamfriend',
       });
       vi.mocked(dbModule.issueLoginSession).mockResolvedValueOnce({
         success: true,
@@ -820,10 +824,14 @@ describe('OAuth Flow Integration', () => {
         expect.anything()
       );
 
-      // Verify DB was called with valid Discord user ID and 64-char lowercase hash
+      // Verify DB was called with valid Discord user ID, the username captured
+      // for display, and a 64-char lowercase hash
       expect(dbModule.issueLoginSession).toHaveBeenCalledTimes(1);
-      const [calledUserId, calledTokenHash] = vi.mocked(dbModule.issueLoginSession).mock.calls[0];
+      const [calledUserId, calledUsername, calledTokenHash] = vi.mocked(
+        dbModule.issueLoginSession
+      ).mock.calls[0];
       expect(calledUserId).toBe(discordUserId);
+      expect(calledUsername).toBe('hamfriend');
       expect(calledTokenHash).toMatch(/^[0-9a-f]{64}$/);
 
       // Verify 302 redirect to /account
@@ -863,6 +871,7 @@ describe('OAuth Flow Integration', () => {
         vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
           status: 'eligible',
           discordUserId,
+          discordUsername: 'hamfriend',
         });
         vi.mocked(dbModule.issueLoginSession).mockResolvedValueOnce({
           success: true,
@@ -905,6 +914,7 @@ describe('OAuth Flow Integration', () => {
         vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
           status: 'eligible',
           discordUserId,
+          discordUsername: 'hamfriend',
         });
         vi.mocked(dbModule.issueLoginSession).mockResolvedValueOnce({
           success: true,
@@ -944,6 +954,7 @@ describe('OAuth Flow Integration', () => {
         vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
           status: 'eligible',
           discordUserId,
+          discordUsername: 'hamfriend',
         });
         vi.mocked(dbModule.issueLoginSession).mockResolvedValueOnce({
           success: true,
@@ -981,6 +992,39 @@ describe('OAuth Flow Integration', () => {
 
     beforeEach(async () => {
       unmockedDiscord = await vi.importActual<typeof import('@/lib/auth/discord')>('@/lib/auth/discord');
+    });
+
+    it('fetchDiscordUserIdentity keeps the id and username and drops every other field', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            id: '123456789012345678',
+            username: 'hamfriend',
+            global_name: 'Ham Friend',
+            email: 'member@example.com',
+            avatar: 'a_1234567890',
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+      );
+
+      const identity = await unmockedDiscord.fetchDiscordUserIdentity('access_token_123');
+      expect(identity).toEqual({ id: '123456789012345678', username: 'hamfriend' });
+    });
+
+    it('fetchDiscordUserIdentity nulls a username outside the accepted shape', async () => {
+      for (const username of ['has space', 'x'.repeat(33), 42, undefined]) {
+        global.fetch = vi.fn().mockResolvedValueOnce(
+          new Response(JSON.stringify({ id: '123456789012345678', username }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        );
+
+        const identity = await unmockedDiscord.fetchDiscordUserIdentity('access_token_123');
+        // An unusable handle costs the display name, never the login.
+        expect(identity).toEqual({ id: '123456789012345678', username: null });
+      }
     });
 
     it('checkGuildMembership classifies eligible role correctly', async () => {
