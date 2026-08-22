@@ -1,4 +1,4 @@
-import { PuffScene } from "@/components/puff-scene";
+import { PuffExperience } from "@/components/puff-experience";
 import { ProjectShelf } from "@/components/project-shelf";
 
 /*
@@ -18,7 +18,7 @@ export default function Home() {
          */}
         <section className="flex min-h-[calc(100svh-var(--nav-height))] flex-col overflow-hidden pb-6">
           <div className="relative flex flex-1 flex-col gap-6 overflow-hidden pt-8 lg:grid lg:grid-cols-[1fr_1.1fr] lg:items-center lg:gap-10 lg:pt-0">
-            <PuffScene
+            <PuffExperience
               anchorId="home-puff-anchor"
               className="pointer-events-none absolute inset-0 z-10"
             />

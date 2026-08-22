@@ -1,0 +1,59 @@
+:global([data-puff-launcher]) {
+  --puff-tap-progress: 0;
+
+  position: relative;
+  -webkit-tap-highlight-color: transparent;
+}
+
+:global([data-puff-launcher])::after {
+  position: absolute;
+  right: 0;
+  bottom: -0.35rem;
+  left: 0;
+  height: 3px;
+  content: "";
+  background: var(--color-decorative-red);
+  transform: scaleX(var(--puff-tap-progress));
+  transform-origin: left center;
+  transition: transform 120ms steps(2, end);
+}
+
+.logoTapHint {
+  position: fixed;
+  z-index: 60;
+  top: calc(var(--nav-height) + 0.65rem);
+  right: max(1rem, env(safe-area-inset-right));
+  padding: 0.45rem 0.65rem;
+  color: var(--color-ink);
+  font-size: 0.65rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  pointer-events: none;
+  background: var(--color-surface);
+  border: 2px solid var(--color-ink);
+  box-shadow: 3px 3px 0 var(--color-ink);
+  animation: tap-hint-arrive 120ms steps(2, end) both;
+}
+
+@keyframes tap-hint-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(-0.5rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .logoTapHint {
+    animation: none;
+  }
+
+  :global([data-puff-launcher])::after {
+    transition: none;
+  }
+}

@@ -691,7 +691,34 @@ if [[ "$STATE" == "migrated_0002" ]]; then
 fi
 
 if [[ "$STATE" == "migrated_0003" ]]; then
-  say "${GREEN}✓${RESET} All migrations (0001 through 0003) are up to date."
+  HAS_PUFF_SCORES_TABLE=$(run_owner_query "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'puff_flappy_scores';")
+
+  if [[ -z "$HAS_PUFF_SCORES_TABLE" ]]; then
+    printf '\n'
+    say "Migration 0004_puff_flappy_leaderboard.sql adds:"
+    say "  - Table: puff_flappy_scores (one member high score per account)"
+    say "  - Ranked-score index and least-privilege runtime grants"
+    printf '\n'
+    warn "Applying migration 0004 is an irreversible schema change."
+    if ! confirm "Apply migration 0004_puff_flappy_leaderboard.sql in a single transaction now?"; then
+      warn "Migration 0004 cancelled by user."
+      exit 1
+    fi
+    say "Applying migrations/0004_puff_flappy_leaderboard.sql..."
+    if run_owner_sql_file "$PROJECT_ROOT/migrations/0004_puff_flappy_leaderboard.sql" "true"; then
+      say "${GREEN}✓${RESET} Migration 0004_puff_flappy_leaderboard.sql applied successfully."
+      STATE="migrated_0004"
+    else
+      warn "Failed to apply migration 0004_puff_flappy_leaderboard.sql."
+      exit 1
+    fi
+  else
+    STATE="migrated_0004"
+  fi
+fi
+
+if [[ "$STATE" == "migrated_0004" ]]; then
+  say "${GREEN}✓${RESET} All migrations (0001 through 0004) are up to date."
   note "CREATE migrations will never be rerun."
 fi
 
