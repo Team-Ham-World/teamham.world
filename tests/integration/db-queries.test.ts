@@ -45,6 +45,7 @@ import {
   generateGameAccessToken,
 } from '@/lib/auth/game-oauth';
 import { getPuffLeaderboard, savePuffHighScore } from '@/lib/puff/leaderboard';
+import { VALID_DEV_ENV } from '../helpers/test-fixtures';
 
 const rawTestDbUrl = process.env.TEST_DATABASE_URL;
 const hasTestDb = Boolean(rawTestDbUrl && rawTestDbUrl.trim() !== '');
@@ -2954,6 +2955,37 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
   });
 
   describe('13. Flappy Puff Member Leaderboard', () => {
+    let savedEnv: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      savedEnv = {
+        AUTH_MODE: process.env.AUTH_MODE,
+        APP_BASE_URL: process.env.APP_BASE_URL,
+        OAUTH_STATE_HMAC_SECRET: process.env.OAUTH_STATE_HMAC_SECRET,
+        GAME_AUTH_REQUEST_HMAC_SECRET: process.env.GAME_AUTH_REQUEST_HMAC_SECRET,
+        DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID,
+        DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
+        DISCORD_GUILD_ID: process.env.DISCORD_GUILD_ID,
+        DISCORD_REQUIRED_ROLE_ID: process.env.DISCORD_REQUIRED_ROLE_ID,
+        DATABASE_URL: process.env.DATABASE_URL,
+      };
+
+      Object.assign(process.env, VALID_DEV_ENV, {
+        APP_BASE_URL: 'http://localhost:3000',
+        DATABASE_URL: runtimeUrl,
+      });
+    });
+
+    afterEach(() => {
+      for (const [key, val] of Object.entries(savedEnv)) {
+        if (val === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = val;
+        }
+      }
+    });
+
     it('keeps only the best score and returns the ranked member snapshot', async () => {
       const accountResult = await ownerPool.query<{ id: string }>(
         `INSERT INTO public.accounts (
