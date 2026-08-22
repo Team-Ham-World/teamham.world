@@ -597,6 +597,8 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
       canvas.height = Math.round(height * ratio);
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.imageSmoothingEnabled = false;
+      context.fillStyle = atlasRef.current?.palette.surface ?? "#fffdf6";
+      context.fillRect(0, 0, width, height);
       if (gameRef.current) resizePuffGame(gameRef.current, width, height);
       else gameRef.current = createPuffGame(width, height);
       needsRedraw = true;

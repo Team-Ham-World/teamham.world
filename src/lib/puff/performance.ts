@@ -1,7 +1,6 @@
 const MOBILE_PIXEL_RATIO_LIMIT = 1.25;
 const DESKTOP_PIXEL_RATIO_LIMIT = 1.5;
-const MOBILE_RENDER_FPS = 30;
-const DESKTOP_RENDER_FPS = 60;
+const RENDER_FPS = 60;
 
 export interface PuffRenderProfileInput {
   devicePixelRatio: number;
@@ -25,12 +24,8 @@ export function getPuffRenderProfile({
   const pixelRatioLimit = coarsePointer
     ? MOBILE_PIXEL_RATIO_LIMIT
     : DESKTOP_PIXEL_RATIO_LIMIT;
-  const framesPerSecond = coarsePointer
-    ? MOBILE_RENDER_FPS
-    : DESKTOP_RENDER_FPS;
-
   return {
     pixelRatio: Math.min(safePixelRatio, pixelRatioLimit),
-    frameIntervalMs: 1000 / framesPerSecond,
+    frameIntervalMs: 1000 / RENDER_FPS,
   };
 }

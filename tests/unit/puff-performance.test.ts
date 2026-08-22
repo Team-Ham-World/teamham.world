@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { getPuffRenderProfile } from "@/lib/puff/performance";
 
 describe("Flappy Puff render profile", () => {
-  it("caps coarse-pointer displays to a low-cost mobile render budget", () => {
+  it("caps mobile pixel density without sacrificing 60 FPS motion", () => {
     expect(
       getPuffRenderProfile({
         devicePixelRatio: 3,
@@ -11,7 +11,7 @@ describe("Flappy Puff render profile", () => {
       }),
     ).toEqual({
       pixelRatio: 1.25,
-      frameIntervalMs: 1000 / 30,
+      frameIntervalMs: 1000 / 60,
     });
   });
 
