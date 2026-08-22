@@ -16,9 +16,9 @@ import {
  * to `textContent`, because reconciling several thousand characters thirty
  * times a second would add work without changing what the browser paints.
  *
- * On desktop, ten clicks reveal the deliberately broken copy machine: the
- * current frame is rasterised once and the hero becomes an event-painted stamp
- * pad. It has no simulation and no animation loop after activation.
+ * Ten pokes reveal the deliberately broken copy machine: the current frame is
+ * rasterised once and the hero becomes an event-painted stamp pad. It has no
+ * simulation and no animation loop after activation.
  */
 
 /** Cells rendered per frame; the main cost knob for the live mascot. */
@@ -119,9 +119,6 @@ export function PuffScene({
     }
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const desktopEasterEgg = window.matchMedia(
-      "(min-width: 1024px) and (hover: hover) and (pointer: fine)",
-    );
     const initialAriaLabel = stage.getAttribute("aria-label");
 
     let cols = 0;
@@ -493,7 +490,7 @@ export function PuffScene({
       stage!.dataset.puffMode = "stamp-pad";
       stage!.setAttribute(
         "aria-label",
-        "Puff stamp pad: click or drag through the hero to print ASCII copies.",
+        "Puff stamp pad: tap, click, or drag through the hero to print ASCII copies.",
       );
       cancelAnimationFrame(frameHandle);
       frameHandle = 0;
@@ -544,14 +541,14 @@ export function PuffScene({
     }
 
     function onPointerDown(event: PointerEvent) {
-      if (!stampMode || event.pointerType === "touch" || event.button !== 0) {
+      if (!stampMode || event.button !== 0) {
         return;
       }
       if (stampAtPointer(event.clientX, event.clientY)) {
         /* The hero becomes a pad in this mode; do not select headline text
            underneath it while the visitor drags a run of prints. */
-        event.preventDefault();
-        isStamping = true;
+        if (event.pointerType !== "touch") event.preventDefault();
+        isStamping = event.pointerType !== "touch";
       }
     }
 
@@ -560,7 +557,7 @@ export function PuffScene({
     }
 
     function onStageClick(event: MouseEvent) {
-      if (stampMode || !desktopEasterEgg.matches || !lastInk) return;
+      if (stampMode || !lastInk) return;
 
       const box = mascot!.getBoundingClientRect();
       const col = Math.floor((event.clientX - box.left) / cellWidth);
