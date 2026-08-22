@@ -20,6 +20,7 @@ export function SiteNav() {
       <div className="flex items-center justify-between gap-4 border-b-2 border-ink py-4">
         <Link
           href="/"
+          data-puff-launcher
           aria-label="HAM &#8212; home"
           className="shrink-0 transition-transform hover:-translate-y-0.5"
         >

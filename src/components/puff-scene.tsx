@@ -24,6 +24,7 @@ import {
 /** Cells rendered per frame; the main cost knob for the live mascot. */
 const CELL_BUDGET = 11500;
 const CELL_BUDGET_NARROW = 5000;
+const CELL_BUDGET_COARSE = 4000;
 const NARROW_WIDTH = 640;
 
 /* The governor only steps down, avoiding visible resolution oscillation. */
@@ -35,6 +36,7 @@ const WARMUP_FRAMES = 12;
 
 /** ASCII does not need the display's full refresh rate. */
 const FRAME_MS = 1000 / 33;
+const FRAME_MS_COARSE = 1000 / 20;
 
 const PROBE_COLS = 40;
 const FALLBACK_ADVANCE = 0.6;
@@ -122,15 +124,22 @@ export function shouldBodyFollow(
 export function PuffScene({
   anchorId,
   className,
+  suspended = false,
 }: {
   anchorId: string;
   className?: string;
+  suspended?: boolean;
 }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const mascotRef = useRef<HTMLDivElement>(null);
   const inkRef = useRef<HTMLPreElement>(null);
   const accentRef = useRef<HTMLPreElement>(null);
   const stampCanvasRef = useRef<HTMLCanvasElement>(null);
+  const suspendedRef = useRef(suspended);
+
+  useEffect(() => {
+    suspendedRef.current = suspended;
+  }, [suspended]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -144,6 +153,10 @@ export function PuffScene({
     }
 
     const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const coarsePointer =
+      window.matchMedia("(any-pointer: coarse)").matches ||
+      navigator.maxTouchPoints > 0;
+    const frameIntervalMs = coarsePointer ? FRAME_MS_COARSE : FRAME_MS;
     const initialAriaLabel = stage.getAttribute("aria-label");
 
     let cols = 0;
@@ -152,8 +165,11 @@ export function PuffScene({
     let cellWidth = 0;
     let cellHeight = 0;
     let fontSize = 0;
-    let cellBudget =
-      window.innerWidth < NARROW_WIDTH ? CELL_BUDGET_NARROW : CELL_BUDGET;
+    let cellBudget = coarsePointer
+      ? CELL_BUDGET_COARSE
+      : window.innerWidth < NARROW_WIDTH
+        ? CELL_BUDGET_NARROW
+        : CELL_BUDGET;
     let slowFrames = 0;
     let framesDrawn = 0;
     let lastInk = "";
@@ -200,6 +216,7 @@ export function PuffScene({
     let frameHandle = 0;
     let resizeFrameHandle = 0;
     let previewFrameHandle = 0;
+    let wasSuspended = false;
     const started = performance.now();
 
     function configureStampCanvas(): boolean {
@@ -415,7 +432,7 @@ export function PuffScene({
 
       if (!still) {
         const elapsed =
-          lastDraw === 0 ? FRAME_MS / 1000 : (now - lastDraw) / 1000;
+          lastDraw === 0 ? frameIntervalMs / 1000 : (now - lastDraw) / 1000;
         const step = Math.min(elapsed, 0.1);
         const yawDelta = targetYaw - lookYaw;
         const pitchDelta = targetPitch - lookPitch;
@@ -491,10 +508,19 @@ export function PuffScene({
         return;
       }
       frameHandle = requestAnimationFrame(tick);
+      if (suspendedRef.current) {
+        wasSuspended = true;
+        return;
+      }
+      if (wasSuspended) {
+        wasSuspended = false;
+        dirty = true;
+        lastDraw = 0;
+      }
       if (!onScreen || document.hidden || cols === 0) return;
 
       if (reduceMotion.matches && !dirty) return;
-      if (now - lastFrame < FRAME_MS) return;
+      if (now - lastFrame < frameIntervalMs) return;
 
       lastFrame = now;
       dirty = false;
@@ -553,6 +579,7 @@ export function PuffScene({
     }
 
     function onPointerMove(event: PointerEvent) {
+      if (suspendedRef.current) return;
       if (event.pointerType === "touch") return;
       lastPointerClientX = event.clientX;
       lastPointerClientY = event.clientY;
@@ -595,6 +622,7 @@ export function PuffScene({
     }
 
     function onPointerDown(event: PointerEvent) {
+      if (suspendedRef.current) return;
       if (!stampMode || event.button !== 0) {
         return;
       }
@@ -611,6 +639,7 @@ export function PuffScene({
     }
 
     function onStageClick(event: MouseEvent) {
+      if (suspendedRef.current) return;
       if (stampMode || !lastInk) return;
 
       const box = mascot!.getBoundingClientRect();
@@ -708,6 +737,7 @@ export function PuffScene({
     <div
       ref={stageRef}
       role="img"
+      aria-hidden={suspended || undefined}
       aria-label="HAM's mascot: a small round creature covered in fur, with a loop of red marker curling off its head."
       className={`overflow-hidden select-none ${className ?? ""}`}
     >

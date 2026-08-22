@@ -44,6 +44,7 @@ import {
   generateGameAuthorizationCode,
   generateGameAccessToken,
 } from '@/lib/auth/game-oauth';
+import { getPuffLeaderboard, savePuffHighScore } from '@/lib/puff/leaderboard';
 
 const rawTestDbUrl = process.env.TEST_DATABASE_URL;
 const hasTestDb = Boolean(rawTestDbUrl && rawTestDbUrl.trim() !== '');
@@ -257,7 +258,8 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migrations 0001 through 0003
+    // 2. Clean existing tables and apply migrations 0001 through 0004
+    await ownerPool.query(`DROP TABLE IF EXISTS public.puff_flappy_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_access_tokens CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_authorization_codes CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_oauth_subjects CASCADE;`);
@@ -276,6 +278,10 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     const migration0003Path = path.resolve(__dirname, '../../migrations/0003_account_display_name.sql');
     const migration0003Sql = fs.readFileSync(migration0003Path, 'utf8');
     await ownerPool.query(migration0003Sql);
+
+    const migration0004Path = path.resolve(__dirname, '../../migrations/0004_puff_flappy_leaderboard.sql');
+    const migration0004Sql = fs.readFileSync(migration0004Path, 'utf8');
+    await ownerPool.query(migration0004Sql);
 
     // 3. Connect as runtime role
     runtimeUrl = buildRuntimeUrl(rawTestDbUrl, TEST_RUNTIME_PASSWORD);
@@ -297,6 +303,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
   beforeEach(async () => {
     if (!ownerPool) return;
     // Clear data between tests to ensure test isolation in FK-safe order
+    await ownerPool.query('DELETE FROM public.puff_flappy_scores;');
     await ownerPool.query('DELETE FROM public.game_access_tokens;');
     await ownerPool.query('DELETE FROM public.game_authorization_codes;');
     await ownerPool.query('DELETE FROM public.game_oauth_subjects;');
@@ -2943,6 +2950,33 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         databaseUrl: runtimeUrl,
       });
       expect(repeatRevoke).toEqual({ success: true });
+    });
+  });
+
+  describe('13. Flappy Puff Member Leaderboard', () => {
+    it('keeps only the best score and returns the ranked member snapshot', async () => {
+      const accountResult = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.accounts (
+           discord_user_id,
+           discord_username,
+           membership_status,
+           access_status,
+           membership_checked_at
+         )
+         VALUES ($1, $2, 'eligible', 'active', NOW())
+         RETURNING id`,
+        [makeDiscordId(990), 'puffpilot']
+      );
+      const accountId = accountResult.rows[0].id;
+
+      await expect(savePuffHighScore(accountId, 7, runtimeUrl)).resolves.toBe(7);
+      await expect(savePuffHighScore(accountId, 3, runtimeUrl)).resolves.toBe(7);
+      await expect(savePuffHighScore(accountId, 11, runtimeUrl)).resolves.toBe(11);
+
+      await expect(getPuffLeaderboard(accountId, runtimeUrl)).resolves.toEqual({
+        personalBest: 11,
+        scores: [{ rank: 1, username: 'puffpilot', score: 11, mine: true }],
+      });
     });
   });
 });

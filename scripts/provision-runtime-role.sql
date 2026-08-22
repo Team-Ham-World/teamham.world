@@ -88,7 +88,7 @@ BEGIN
     SELECT EXISTS (
         SELECT 1 FROM information_schema.tables
         WHERE table_schema = 'public'
-          AND table_name IN ('accounts', 'sessions', 'game_oauth_clients', 'game_oauth_subjects', 'game_authorization_codes', 'game_access_tokens')
+          AND table_name IN ('accounts', 'sessions', 'game_oauth_clients', 'game_oauth_subjects', 'game_authorization_codes', 'game_access_tokens', 'puff_flappy_scores')
     ) INTO v_has_auth_tables;
 
     IF NOT v_has_auth_tables THEN
