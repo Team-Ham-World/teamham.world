@@ -162,6 +162,10 @@ export interface PuffPose {
   squash: number;
   /** 1 = eyes open, near 0 = eyes shut. */
   blink: number;
+  /** Horizontal eye offset across the face, in model-space units. */
+  gazeX?: number;
+  /** Vertical eye offset across the face, in model-space units. */
+  gazeY?: number;
 }
 
 function sdSphere(x: number, y: number, z: number, r: number): number {
@@ -356,6 +360,8 @@ export function featureAt(
   }
 
   const y = py - pose.bob;
+  const gazeX = pose.gazeX ?? 0;
+  const gazeY = pose.gazeY ?? 0;
 
   /*
    * Signed rather than mirrored through |x|. Mirroring would put each
@@ -364,8 +370,8 @@ export function featureAt(
    * highlights have to land on the same side.
    */
   const side = px < 0 ? -1 : 1;
-  const dx = px - side * EYE_X;
-  const dy = y - EYE_Y;
+  const dx = px - (side * EYE_X + gazeX);
+  const dy = y - (EYE_Y + gazeY);
   const lidded = dy / pose.blink;
 
   if (dx * dx + lidded * lidded < EYE_R * EYE_R) {

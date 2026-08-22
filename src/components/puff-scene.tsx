@@ -44,8 +44,19 @@ const CELL_LINE_RATIO = 0.74;
 const REST_YAW = -0.12;
 const LOOK_YAW = 0.42;
 const LOOK_PITCH = 0.24;
-const LOOK_RESPONSE = 7.5;
 const LOOK_DEPTH_RATIO = 1.15;
+
+/* The eyes lead quickly; the heavier body only follows after they run out of
+   room, then stops once they have nearly re-centred. */
+const EYE_YAW_LIMIT = 0.13;
+const EYE_PITCH_LIMIT = 0.09;
+const EYE_GAZE_X = 0.055;
+const EYE_GAZE_Y = 0.04;
+const EYE_RESPONSE = 20;
+const BODY_RESPONSE = 4.5;
+const POINTER_RESPONSE = 7.5;
+const BODY_TRIGGER_RATIO = 0.92;
+const BODY_RECENTER_RATIO = 0.28;
 
 const SWAY_AMPLITUDE = 0.06;
 const SWAY_SPEED = 0.5;
@@ -94,6 +105,20 @@ function measureAdvance(pre: HTMLPreElement): number {
   return advance > 0 ? advance : FALLBACK_ADVANCE;
 }
 
+/** Hysteresis keeps the body from twitching at the edge of the eye range. */
+export function shouldBodyFollow(
+  eyeYaw: number,
+  eyePitch: number,
+  following: boolean,
+): boolean {
+  const eyeDemand = Math.hypot(
+    eyeYaw / EYE_YAW_LIMIT,
+    eyePitch / EYE_PITCH_LIMIT,
+  );
+  return eyeDemand >
+    (following ? BODY_RECENTER_RATIO : BODY_TRIGGER_RATIO);
+}
+
 export function PuffScene({
   anchorId,
   className,
@@ -139,11 +164,15 @@ export function PuffScene({
     let squash = 0;
     let easterEggClicks = 0;
 
-    /* Gaze targets are absolute directions from Puff's own centre. */
+    /* Pointer targets are absolute directions. Eye angles stay relative to the
+       body so they can lead it and re-centre as the body catches up. */
     let lookYaw = REST_YAW;
     let lookPitch = 0;
+    let eyeYaw = 0;
+    let eyePitch = 0;
     let targetYaw = REST_YAW;
     let targetPitch = 0;
+    let bodyFollowing = false;
     let pointerActive = false;
     let pointerEngagement = 0;
     let mascotCenterPageX = 0;
@@ -390,11 +419,34 @@ export function PuffScene({
       if (!still) {
         const elapsed =
           lastDraw === 0 ? FRAME_MS / 1000 : (now - lastDraw) / 1000;
-        const ease = 1 - Math.exp(-LOOK_RESPONSE * Math.min(elapsed, 0.1));
-        lookYaw += (targetYaw - lookYaw) * ease;
-        lookPitch += (targetPitch - lookPitch) * ease;
+        const step = Math.min(elapsed, 0.1);
+        const yawDelta = targetYaw - lookYaw;
+        const pitchDelta = targetPitch - lookPitch;
+
+        const targetEyeYaw = Math.max(
+          -EYE_YAW_LIMIT,
+          Math.min(EYE_YAW_LIMIT, yawDelta),
+        );
+        const targetEyePitch = Math.max(
+          -EYE_PITCH_LIMIT,
+          Math.min(EYE_PITCH_LIMIT, pitchDelta),
+        );
+        const eyeEase = 1 - Math.exp(-EYE_RESPONSE * step);
+        eyeYaw += (targetEyeYaw - eyeYaw) * eyeEase;
+        eyePitch += (targetEyePitch - eyePitch) * eyeEase;
+
+        bodyFollowing = pointerActive
+          ? shouldBodyFollow(eyeYaw, eyePitch, bodyFollowing)
+          : true;
+        if (bodyFollowing) {
+          const bodyEase = 1 - Math.exp(-BODY_RESPONSE * step);
+          lookYaw += yawDelta * bodyEase;
+          lookPitch += pitchDelta * bodyEase;
+        }
+
+        const pointerEase = 1 - Math.exp(-POINTER_RESPONSE * step);
         pointerEngagement +=
-          ((pointerActive ? 1 : 0) - pointerEngagement) * ease;
+          ((pointerActive ? 1 : 0) - pointerEngagement) * pointerEase;
         squash *= Math.exp(-9 * elapsed);
       }
       lastDraw = now;
@@ -414,6 +466,8 @@ export function PuffScene({
           bob: still ? 0 : Math.sin(time * BOB_SPEED) * BOB_AMPLITUDE,
           squash,
           blink: still ? 1 : blinkAt(time),
+          gazeX: still ? 0 : (eyeYaw / EYE_YAW_LIMIT) * EYE_GAZE_X,
+          gazeY: still ? 0 : (-eyePitch / EYE_PITCH_LIMIT) * EYE_GAZE_Y,
         },
         { yaw: lookYaw + sway, pitch: lookPitch },
       );

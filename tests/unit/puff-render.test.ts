@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import { renderPuff } from "@/lib/puff/render";
+import { shouldBodyFollow } from "@/components/puff-scene";
 import {
   appendPuffStamp,
   createPuffStamp,
@@ -133,6 +134,14 @@ describe("lib/puff/model", () => {
     expect(featureAt(0, -0.04, 0.85, REST)).toBe(MATERIAL_FLUFF);
   });
 
+  it("moves both eyes independently of the body pose", () => {
+    const lookingRight = { ...REST, gazeX: 0.05 };
+
+    expect(featureAt(0.18, -0.04, 0.85, REST)).toBe(MATERIAL_EYE);
+    expect(featureAt(0.18, -0.04, 0.85, lookingRight)).toBe(MATERIAL_FLUFF);
+    expect(featureAt(0.5, -0.04, 0.85, lookingRight)).toBe(MATERIAL_EYE);
+  });
+
   it("puts both catchlights on the same side, as one light source would", () => {
     expect(featureAt(0.32 - 0.042, -0.04 + 0.046, 0.85, REST)).toBe(
       MATERIAL_SHINE,
@@ -158,5 +167,14 @@ describe("lib/puff/model", () => {
   it("grows ear tufts clear of the body", () => {
     expect(puffSdf(0.5, 0.85, 0, REST)).toBeLessThan(0);
     expect(puffSdf(0, 1.02, 0, REST)).toBeGreaterThan(0);
+  });
+});
+
+describe("Puff's gaze rig", () => {
+  it("starts body movement at the eye limit and stops near centre", () => {
+    expect(shouldBodyFollow(0.05, 0, false)).toBe(false);
+    expect(shouldBodyFollow(0.125, 0, false)).toBe(true);
+    expect(shouldBodyFollow(0.05, 0, true)).toBe(true);
+    expect(shouldBodyFollow(0.01, 0, true)).toBe(false);
   });
 });
