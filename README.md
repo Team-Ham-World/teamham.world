@@ -65,6 +65,12 @@ Each member gets a page at `teamham.world/m/<member>`: a short introduction, one
 showcase project, and a link out to their own site. The `Who` section on `/`
 lists the catalog and is the only navigational route to these pages.
 
+**`MEMBERS` is currently empty**, so no member page exists: `/m/<anything>`
+returns the branded 404 and the `Who` section does not render. The section is
+rendered by `MemberDirectory` rather than by `page.tsx`, so that the heading
+appears and disappears with its contents — a `Who` rule over an empty rail
+would be the placeholder the content integrity rule forbids.
+
 The end-to-end pipeline — catalog entry, local validation, subdomain
 delegation, DNS, and offboarding — is documented in `organization-docs`, at
 `website/MEMBER_PAGES_AND_SUBDOMAINS.md`.

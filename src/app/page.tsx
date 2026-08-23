@@ -102,34 +102,12 @@ export default function Home() {
           </div>
         </section>
 
-        <section id="who" aria-labelledby="who-heading" className="mt-20 sm:mt-28">
-          <h2
-            id="who-heading"
-            className="font-display relative inline-block text-3xl sm:text-4xl"
-          >
-            Who
-            {/* Hand-drawn underline — decorative accent, carries no meaning. */}
-            <svg
-              aria-hidden="true"
-              viewBox="0 0 120 8"
-              preserveAspectRatio="none"
-              className="absolute -bottom-2 left-0 h-2 w-full text-decorative-red"
-            >
-              <path
-                d="M2 5 C 26 1, 42 8, 64 4 S 100 2, 118 6"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="3"
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-              />
-            </svg>
-          </h2>
-
-          <div className="mt-12">
-            <MemberDirectory />
-          </div>
-        </section>
+        {/*
+         * Renders its own `Who` heading, or nothing at all while the member
+         * catalog is empty — the one section here that can legitimately have
+         * nothing to show.
+         */}
+        <MemberDirectory />
 
         <section
           id="whats-this"

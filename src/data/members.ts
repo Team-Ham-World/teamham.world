@@ -199,14 +199,19 @@ export function resolveShowcase(member: Member): ResolvedShowcase | null {
   };
 }
 
-export const MEMBERS: Member[] = [
-  {
-    // Only the recorded facts. `blurb`, `website`, and `showcase` are omitted
-    // until CyR1en supplies them — see the content integrity rule above.
-    slug: "cyr1en",
-    name: "CyR1en",
-  },
-];
+/**
+ * The catalog is intentionally empty.
+ *
+ * Member pages are built, tested, and ready; no member has been published yet.
+ * While this is empty, `/m/<anything>` is a 404 and the `Who` section on `/`
+ * does not render at all — a heading over an empty rail would be exactly the
+ * placeholder WEBSITE.md §10 forbids.
+ *
+ * Add an entry only once the member has approved the facts in it. `slug` and
+ * `name` alone make a complete entry; the page is designed to read correctly
+ * with nothing else. See README.md for the full shape and the review rules.
+ */
+export const MEMBERS: Member[] = [];
 
 export function findMember(slug: string): Member | undefined {
   return MEMBERS.find((member) => member.slug === slug);
