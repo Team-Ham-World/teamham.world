@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import Link from "next/link";
 
+import { SiteFooter } from "@/components/site-footer";
+
 export const metadata: Metadata = {
   title: "Member Portal — HAM",
   description: "Member access and session management for HAM.",
@@ -152,11 +154,7 @@ export default async function AccountPage() {
         </section>
       </main>
 
-      <footer className="mx-auto w-full max-w-5xl px-5 pb-12 sm:px-8">
-        <div className="border-t-2 border-ink pt-6 text-sm tracking-wide text-muted">
-          teamham.world &#183; made by HAM
-        </div>
-      </footer>
+      <SiteFooter />
     </>
   );
 }

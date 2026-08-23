@@ -18,4 +18,13 @@ const nextConfig: NextConfig = {
   },
 };
 
+/*
+ * Deliberately no wildcard host rewrite for member subdomains.
+ *
+ * `<member>.teamham.world` is delegated to the member's own deployment, so this
+ * app must not claim `*.teamham.world`: a wildcard here would race the members'
+ * own DNS records and silently serve a HAM page whenever one was missing or
+ * mid-migration. Member pages live at `/m/<member>` on the apex instead.
+ */
+
 export default nextConfig;

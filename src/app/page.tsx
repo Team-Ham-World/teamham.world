@@ -1,4 +1,7 @@
+import { MemberDirectory } from "@/components/member-directory";
 import { PuffExperience } from "@/components/puff-experience";
+
+import { SiteFooter } from "@/components/site-footer";
 import { ProjectShelf } from "@/components/project-shelf";
 
 /*
@@ -99,6 +102,35 @@ export default function Home() {
           </div>
         </section>
 
+        <section id="who" aria-labelledby="who-heading" className="mt-20 sm:mt-28">
+          <h2
+            id="who-heading"
+            className="font-display relative inline-block text-3xl sm:text-4xl"
+          >
+            Who
+            {/* Hand-drawn underline — decorative accent, carries no meaning. */}
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 120 8"
+              preserveAspectRatio="none"
+              className="absolute -bottom-2 left-0 h-2 w-full text-decorative-red"
+            >
+              <path
+                d="M2 5 C 26 1, 42 8, 64 4 S 100 2, 118 6"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+                vectorEffect="non-scaling-stroke"
+              />
+            </svg>
+          </h2>
+
+          <div className="mt-12">
+            <MemberDirectory />
+          </div>
+        </section>
+
         <section
           id="whats-this"
           aria-labelledby="whats-this-heading"
@@ -120,11 +152,7 @@ export default function Home() {
         </section>
       </main>
 
-      <footer className="mx-auto w-full max-w-5xl px-5 pb-12 sm:px-8">
-        <div className="border-t-2 border-ink pt-6 text-sm tracking-wide text-muted">
-          teamham.world &#183; made by HAM
-        </div>
-      </footer>
+      <SiteFooter />
     </>
   );
 }
