@@ -10,6 +10,23 @@ import {
 } from "@/data/members";
 import { PROJECTS } from "@/data/projects";
 
+/**
+ * Every absolute URL a member entry can put in front of a visitor.
+ *
+ * Read through `resolveShowcase` rather than off the raw entry, so a
+ * `kind: "project"` showcase is checked on the links the page actually renders
+ * — which come from `projects.ts`, not from the member entry itself.
+ */
+function outboundLinks(member: Member): Array<{ field: string; url: string }> {
+  const showcase = resolveShowcase(member);
+
+  return [
+    { field: "website", url: member.website },
+    { field: "showcase.url", url: showcase?.publicUrl },
+    { field: "showcase.repository", url: showcase?.repository },
+  ].filter((link): link is { field: string; url: string } => Boolean(link.url));
+}
+
 describe("data/members", () => {
   describe("isValidMemberSlug", () => {
     it("accepts RFC 1123 host labels", () => {
@@ -56,12 +73,45 @@ describe("data/members", () => {
       }
     });
 
-    it("records every website as an absolute https URL", () => {
+    it("records every outbound link as an absolute https URL", () => {
       for (const member of MEMBERS) {
-        if (!member.website) continue;
-        const url = new URL(member.website);
-        expect(url.protocol, member.slug).toBe("https:");
+        for (const { field, url } of outboundLinks(member)) {
+          const label = `${member.slug} ${field}: ${url}`;
+          // Parseability is asserted first so a relative URL fails by naming
+          // the offending field, rather than as a bare TypeError from `new URL`.
+          expect(URL.canParse(url), label).toBe(true);
+          expect(new URL(url).protocol, label).toBe("https:");
+        }
       }
+    });
+
+    /*
+     * The guard above iterates the committed catalog, so it passes vacuously
+     * while no member has a showcase. This asserts the collector itself finds
+     * all three fields — without it, a collector that silently returned nothing
+     * would look exactly like a clean catalog.
+     */
+    it("collects every link field a fully populated member can carry", () => {
+      const links = outboundLinks({
+        slug: "example",
+        name: "Example",
+        website: "https://example.com",
+        showcase: {
+          kind: "external",
+          name: "Thing",
+          shortDescription: "A thing.",
+          type: "tool",
+          status: "released",
+          url: "https://thing.example.com",
+          repository: "https://example.com/src",
+        },
+      });
+
+      expect(links.map((link) => link.field)).toEqual([
+        "website",
+        "showcase.url",
+        "showcase.repository",
+      ]);
     });
 
     it("points every project showcase at a project that exists", () => {

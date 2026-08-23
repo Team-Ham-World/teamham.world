@@ -65,8 +65,8 @@ Each member gets a page at `teamham.world/m/<member>`: a short introduction, one
 showcase project, and a link out to their own site. The `Who` section on `/`
 lists the catalog and is the only navigational route to these pages.
 
-The end-to-end pipeline — catalog entry, subdomain delegation, DNS, and
-offboarding — is documented in `organization-docs`, at
+The end-to-end pipeline — catalog entry, local validation, subdomain
+delegation, DNS, and offboarding — is documented in `organization-docs`, at
 `website/MEMBER_PAGES_AND_SUBDOMAINS.md`.
 
 `<member>.teamham.world` is **not** served by this app. That subdomain is
@@ -104,10 +104,22 @@ showcase: {
 some will have no site at all.
 
 `tests/unit/members.test.ts` enforces the catalog's invariants: slugs are valid,
-unique, non-reserved DNS labels, websites are absolute `https` URLs, and every
-project reference resolves. Slugs are validated as DNS labels even though they
-appear here as a path segment, because the same string becomes the member's
-delegated subdomain.
+unique, non-reserved DNS labels; every outbound link — `website`,
+`showcase.url`, and `showcase.repository` — is an absolute `https` URL; and
+every project reference resolves. Slugs are validated as DNS labels even though
+they appear here as a path segment, because the same string becomes the
+member's delegated subdomain.
+
+Outbound links are collected through `resolveShowcase`, so a `kind: "project"`
+showcase is checked on the links it actually renders — which come from
+`projects.ts`, not from the member entry.
+
+Two conventions the tests do not cover, and review has to: `blurb` stays to one
+or two sentences (the page renders it in full, the directory card clamps to
+three lines), and `showcase.url` is left unset when it would equal `website`,
+since the page already renders `website` as its primary call to action.
+
+Members appear on `/` in `MEMBERS` array order — there is no sort.
 
 ### Delegating a subdomain
 
