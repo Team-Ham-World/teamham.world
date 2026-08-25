@@ -38,6 +38,7 @@ describe("member model and validation", () => {
       type: "game",
       status: "released",
       url: "https://example.com/game",
+      imageUrl: "https://images.example.com/game-cover.jpg",
     })).toEqual({
       kind: "external",
       name: "A tiny game",
@@ -45,10 +46,11 @@ describe("member model and validation", () => {
       type: "game",
       status: "released",
       url: "https://example.com/game",
+      imageUrl: "https://images.example.com/game-cover.jpg",
     });
   });
 
-  it("rejects unknown projects, non-HTTPS links, and external artwork", () => {
+  it("rejects unknown projects, non-HTTPS links, and legacy artwork objects", () => {
     expect(parseMemberShowcase({ kind: "project", projectSlug: "missing" })).toBeNull();
     expect(parseMemberShowcase({
       kind: "external",
@@ -57,6 +59,14 @@ describe("member model and validation", () => {
       type: "tool",
       status: "released",
       url: "http://example.com",
+    })).toBeNull();
+    expect(parseMemberShowcase({
+      kind: "external",
+      name: "Thing",
+      shortDescription: "A thing.",
+      type: "tool",
+      status: "released",
+      imageUrl: "http://example.com/cover.jpg",
     })).toBeNull();
     expect(parseMemberShowcase({
       kind: "external",
@@ -113,6 +123,7 @@ describe("member model and validation", () => {
       type: "tool",
       status: "released",
       repository: "https://example.com/source",
+      imageUrl: "https://images.example.com/personal-thing.png",
     })).toEqual({
       name: "Personal Thing",
       shortDescription: "A thing.",
@@ -120,6 +131,11 @@ describe("member model and validation", () => {
       status: "released",
       publicUrl: undefined,
       repository: "https://example.com/source",
+      artwork: {
+        src: "https://images.example.com/personal-thing.png",
+        alt: "Personal Thing showcase artwork",
+        remote: true,
+      },
     });
   });
 });

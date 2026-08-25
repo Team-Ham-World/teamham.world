@@ -41,7 +41,7 @@ Add `migrations/0005_member_pages.sql` as a committed, additive migration.
 | `display_name` | Required plain text, maximum 80 characters. |
 | `blurb` | Optional plain text, maximum 500 characters. |
 | `website_url` | Optional absolute HTTPS URL, maximum 2048 characters. |
-| `showcase` | Optional JSON object matching a server-defined editable showcase union; validate it on every read and write, and reject external artwork fields in v1. |
+| `showcase` | Optional JSON object matching a server-defined editable showcase union. External showcases may contain one optional absolute HTTPS artwork URL; when it is omitted and a project URL exists, the authorized save path may discover and persist a public Open Graph image. Validate the union on every read and write. |
 | `is_published` | Required boolean, controlled by an administrator. |
 | `created_at`, `updated_at` | Required timestamps. |
 
@@ -83,6 +83,7 @@ Grant `app_runtime_role` only the column operations needed by the implemented qu
 3. Validate the same field bounds and showcase union on the server regardless of client validation.
 4. Return field-level errors without echoing secrets or internal identifiers.
 5. Preserve the current page design and metadata behavior.
+6. Resolve a missing external-project artwork URL from Open Graph metadata as a best-effort save-time enhancement. Revalidate every HTTPS redirect and DNS result, block non-public destinations, cap time and response size, and continue saving without artwork when discovery fails.
 
 ### Admin page
 
@@ -115,7 +116,7 @@ Automated coverage must include:
 - role parsing and session DTOs;
 - admin-only creation, assignment, publishing, and unpublishing;
 - owner-only updates, including forged slug and owner inputs;
-- field limits, HTTPS URL checks, reserved slugs, and malformed showcases;
+- field limits, HTTPS URL checks, reserved slugs, malformed showcases, Open Graph parsing, and private-address rejection;
 - public DTO privacy and unpublished-page behavior;
 - homepage preview, members-directory search and navigation, and member-page metadata;
 - keyboard, touch, reduced-motion, and 375 px directory behavior; and

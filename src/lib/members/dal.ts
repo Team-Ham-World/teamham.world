@@ -11,6 +11,7 @@ import {
   type MemberDirectoryItem,
   type MemberPublicPage,
 } from "@/lib/members/model";
+import { findOpenGraphImage } from "@/lib/members/open-graph";
 import {
   validateMemberContent,
   validateMemberSlug,
@@ -429,13 +430,37 @@ export async function updateOwnedMemberPage(
   }
 
   const sql = getDbClient();
+  let showcase = content.data.showcase;
+  if (
+    showcase?.kind === "external" &&
+    !showcase.imageUrl &&
+    showcase.url
+  ) {
+    const ownerRows = (await sql`
+      SELECT slug
+      FROM public.member_pages
+      WHERE slug = ${slug}
+        AND owner_account_id = ${account.id}
+      LIMIT 1;
+    `) as Array<{ slug: unknown }>;
+    if (ownerRows.length === 0) {
+      throw new MemberAccessError("forbidden", "You cannot edit this member page.");
+    }
+    if (ownerRows.length !== 1 || ownerRows[0].slug !== slug) {
+      throw new Error("Malformed member-page ownership result");
+    }
+
+    const imageUrl = await findOpenGraphImage(showcase.url);
+    if (imageUrl) showcase = { ...showcase, imageUrl };
+  }
+
   const rows = (await sql`
     UPDATE public.member_pages
     SET
       display_name = ${content.data.displayName},
       blurb = ${content.data.blurb},
       website_url = ${content.data.websiteUrl},
-      showcase = ${content.data.showcase},
+      showcase = ${showcase},
       updated_at = NOW()
     WHERE slug = ${slug}
       AND owner_account_id = ${account.id}

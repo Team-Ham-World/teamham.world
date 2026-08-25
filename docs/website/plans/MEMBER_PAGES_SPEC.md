@@ -50,7 +50,8 @@ The first release preserves the existing member-page content model:
 - display name;
 - short introduction;
 - optional absolute HTTPS website URL; and
-- optional single showcase, either a registered HAM project or an external project.
+- optional single showcase, either a registered HAM project or an external project; and
+- optional absolute HTTPS artwork URL for an external showcase. When it is blank and the external project has a URL, saving makes a best-effort attempt to discover and persist that page's Open Graph image.
 
 Slugs, ownership, and publication state are administrator-managed. Slugs are lowercase DNS labels, must not be reserved, and are immutable after creation in v1.
 
@@ -62,6 +63,7 @@ Slugs, ownership, and publication state are administrator-managed. Slugs are low
 - Public reads return only published content and never expose account IDs, Discord IDs, roles, or administrative metadata.
 - Text is plain text; rich HTML and Markdown are not accepted.
 - All URLs are validated server-side as absolute HTTPS URLs.
+- Open Graph discovery is optional, follows only a small number of validated HTTPS redirects, and must reject loopback, private, link-local, and reserved destinations. A discovery failure does not fail the member-page save.
 - Content length limits are enforced in both the form and the server-side write path.
 - The member directory is generated from published pages rather than `src/data/members.ts`.
 - A database or authorization failure must not be reported as a successful save.
@@ -91,7 +93,7 @@ Slugs, ownership, and publication state are administrator-managed. Slugs are low
 
 - Member-created pages or slug changes.
 - Multiple page owners, delegated editors, revision history, or approval workflows.
-- Image/file uploads and arbitrary page layouts.
+- Image/file uploads and arbitrary page layouts. Showcase artwork is URL-based only.
 - DNS automation or hosting member subdomains from the hub.
 - Administrator role management through the web UI.
 

@@ -101,6 +101,7 @@ export function parseMemberShowcase(value: unknown): MemberShowcase | null {
       "status",
       "url",
       "repository",
+      "imageUrl",
     ])
   ) {
     return null;
@@ -115,6 +116,10 @@ export function parseMemberShowcase(value: unknown): MemberShowcase | null {
     value.repository,
     MEMBER_LIMITS.websiteUrl,
   );
+  const imageUrl = parseOptionalHttpsUrl(
+    value.imageUrl,
+    MEMBER_LIMITS.websiteUrl,
+  );
 
   if (
     !name ||
@@ -126,7 +131,8 @@ export function parseMemberShowcase(value: unknown): MemberShowcase | null {
     typeof status !== "string" ||
     !PROJECT_STATUSES.has(status as ProjectStatus) ||
     url === undefined ||
-    repository === undefined
+    repository === undefined ||
+    imageUrl === undefined
   ) {
     return null;
   }
@@ -139,6 +145,7 @@ export function parseMemberShowcase(value: unknown): MemberShowcase | null {
     status: status as ProjectStatus,
     ...(url ? { url } : {}),
     ...(repository ? { repository } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
   };
 }
 
@@ -210,6 +217,7 @@ export function showcaseFromFormData(formData: FormData): unknown {
       status: formData.get("showcaseStatus"),
       url: formData.get("showcaseUrl"),
       repository: formData.get("showcaseRepository"),
+      imageUrl: formData.get("showcaseImageUrl"),
     };
   }
   return { kind };

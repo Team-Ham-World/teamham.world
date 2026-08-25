@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState } from "react";
+import Link from "next/link";
+import { useActionState, useState } from "react";
 
 import {
   updateMemberPageAction,
@@ -10,6 +11,7 @@ import { FormSubmitButton } from "@/components/form-submit-button";
 import { PROJECTS, STATUS_LABELS, type ProjectStatus } from "@/data/projects";
 import type { MemberPublicPage } from "@/lib/members/model";
 import { MEMBER_LIMITS } from "@/lib/members/validation";
+import { memberPath } from "@/lib/site";
 
 const INITIAL_STATE: MemberEditorState = {
   status: "idle",
@@ -18,6 +20,14 @@ const INITIAL_STATE: MemberEditorState = {
 };
 
 const STATUSES = Object.keys(STATUS_LABELS) as ProjectStatus[];
+
+type ShowcaseKind = "none" | "project" | "external";
+
+const SHOWCASE_HELP: Record<ShowcaseKind, string> = {
+  none: "The showcase section will stay off this page.",
+  project: "Choose one project from HAM's current lineup.",
+  external: "Add the details for a project outside the HAM lineup.",
+};
 
 function FieldError({ id, message }: { id: string; message?: string }) {
   return message ? (
@@ -33,6 +43,7 @@ const INPUT_CLASS =
 export function MemberEditor({ member }: { member: MemberPublicPage }) {
   const [state, action] = useActionState(updateMemberPageAction, INITIAL_STATE);
   const initialKind = member.showcase?.kind ?? "none";
+  const [showcaseKind, setShowcaseKind] = useState<ShowcaseKind>(initialKind);
   const external = member.showcase?.kind === "external" ? member.showcase : null;
 
   return (
@@ -41,20 +52,37 @@ export function MemberEditor({ member }: { member: MemberPublicPage }) {
       aria-labelledby="edit-page-heading"
       className="mt-16 border-t-2 border-ink pt-10"
     >
-      <div className="max-w-3xl">
-        <p className="text-xs font-bold tracking-[0.18em] text-muted uppercase">
-          Owner tools
-        </p>
-        <h2 id="edit-page-heading" className="font-display mt-2 text-3xl">
-          Edit your page
-        </h2>
-        <p className="mt-3 max-w-prose leading-relaxed text-muted">
-          Changes appear here immediately. An administrator controls whether the
-          page is visible to everyone.
-        </p>
+      <div className="flex max-w-3xl flex-wrap items-start justify-between gap-5">
+        <div>
+          <p className="text-xs font-bold tracking-[0.18em] text-muted uppercase">
+            Owner tools
+          </p>
+          <h2 id="edit-page-heading" className="font-display mt-2 text-3xl">
+            Edit your page
+          </h2>
+          <p className="mt-3 max-w-prose leading-relaxed text-muted">
+            Changes appear here immediately. An administrator controls whether the
+            page is visible to everyone.
+          </p>
+        </div>
+        <Link
+          href={memberPath(member.slug)}
+          className="inline-flex min-h-11 items-center font-bold text-interactive-blue underline underline-offset-4"
+        >
+          Done editing
+        </Link>
       </div>
 
-      <form action={action} className="mt-8 max-w-3xl space-y-7" noValidate>
+      <form
+        action={action}
+        onReset={(event) => {
+          // Successful React form actions reset uncontrolled fields by default.
+          // This editor stays open after saving, so keep its saved values visible.
+          event.preventDefault();
+        }}
+        className="mt-8 max-w-3xl space-y-7"
+        noValidate
+      >
         <input type="hidden" name="slug" value={member.slug} />
 
         <div>
@@ -118,23 +146,37 @@ export function MemberEditor({ member }: { member: MemberPublicPage }) {
           <select
             id="showcaseKind"
             name="showcaseKind"
-            defaultValue={initialKind}
-            aria-describedby={state.fieldErrors.showcase ? "showcase-error" : undefined}
+            value={showcaseKind}
+            onChange={(event) => {
+              const nextKind = event.currentTarget.value;
+              if (
+                nextKind === "none" ||
+                nextKind === "project" ||
+                nextKind === "external"
+              ) {
+                setShowcaseKind(nextKind);
+              }
+            }}
+            aria-controls={
+              showcaseKind === "project"
+                ? "showcase-project-fields"
+                : showcaseKind === "external"
+                  ? "showcase-external-fields"
+                  : undefined
+            }
+            aria-describedby={`showcase-help${state.fieldErrors.showcase ? " showcase-error" : ""}`}
             className={INPUT_CLASS}
           >
             <option value="none">No showcase</option>
             <option value="project">A HAM project</option>
             <option value="external">Another project</option>
           </select>
-          <p className="mt-3 text-sm text-muted">
-            Choose a type above, then open its fields below. Unselected fields are ignored.
+          <p id="showcase-help" aria-live="polite" className="mt-3 text-sm text-muted">
+            {SHOWCASE_HELP[showcaseKind]}
           </p>
 
-          <details open={initialKind === "project"} className="mt-5 border-t-2 border-ink pt-4">
-            <summary className="flex min-h-11 cursor-pointer items-center font-bold text-interactive-blue underline underline-offset-4">
-              HAM project fields
-            </summary>
-            <div className="mt-3">
+          {showcaseKind === "project" ? (
+            <div id="showcase-project-fields" className="mt-5 border-t-2 border-ink pt-5">
               <label htmlFor="projectSlug" className="font-bold">
                 HAM project
               </label>
@@ -152,13 +194,13 @@ export function MemberEditor({ member }: { member: MemberPublicPage }) {
                 ))}
               </select>
             </div>
-          </details>
+          ) : null}
 
-          <details open={initialKind === "external"} className="mt-5 border-t-2 border-ink pt-4">
-            <summary className="flex min-h-11 cursor-pointer items-center font-bold text-interactive-blue underline underline-offset-4">
-              External project fields
-            </summary>
-            <div className="mt-5 grid gap-5 sm:grid-cols-2">
+          {showcaseKind === "external" ? (
+            <div
+              id="showcase-external-fields"
+              className="mt-5 grid gap-5 border-t-2 border-ink pt-5 sm:grid-cols-2"
+            >
               <div>
                 <label htmlFor="showcaseName" className="font-bold">Name</label>
                 <input
@@ -216,6 +258,23 @@ export function MemberEditor({ member }: { member: MemberPublicPage }) {
                 />
               </div>
               <div className="sm:col-span-2">
+                <label htmlFor="showcaseImageUrl" className="font-bold">Artwork URL <span className="font-normal text-muted">(optional)</span></label>
+                <input
+                  id="showcaseImageUrl"
+                  name="showcaseImageUrl"
+                  type="url"
+                  inputMode="url"
+                  maxLength={MEMBER_LIMITS.websiteUrl}
+                  placeholder="https://example.com/project-cover.jpg"
+                  defaultValue={external?.imageUrl ?? ""}
+                  aria-describedby="showcaseImageUrl-help"
+                  className={INPUT_CLASS}
+                />
+                <p id="showcaseImageUrl-help" className="mt-2 text-sm text-muted">
+                  Leave blank and we&apos;ll try the project URL&apos;s Open Graph image when you save.
+                </p>
+              </div>
+              <div className="sm:col-span-2">
                 <label htmlFor="showcaseRepository" className="font-bold">Source URL <span className="font-normal text-muted">(optional)</span></label>
                 <input
                   id="showcaseRepository"
@@ -227,7 +286,7 @@ export function MemberEditor({ member }: { member: MemberPublicPage }) {
                 />
               </div>
             </div>
-          </details>
+          ) : null}
 
           <FieldError id="showcase-error" message={state.fieldErrors.showcase} />
         </fieldset>

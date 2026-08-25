@@ -153,7 +153,7 @@ export function ProjectArtwork({
   artwork,
   sizes,
 }: {
-  artwork?: { src: string; alt: string };
+  artwork?: { src: string; alt: string; remote?: boolean };
   sizes: string;
 }) {
   if (!artwork) {
@@ -162,13 +162,27 @@ export function ProjectArtwork({
 
   return (
     <div className="relative aspect-video w-full border-2 border-ink bg-surface">
-      <Image
-        src={artwork.src}
-        alt={artwork.alt}
-        fill
-        sizes={sizes}
-        className="object-cover"
-      />
+      {artwork.remote ? (
+        // The hostname is member-controlled, so bypassing Next's image proxy
+        // avoids turning the optimizer into an unrestricted remote fetcher.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={artwork.src}
+          alt={artwork.alt}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className="absolute inset-0 size-full object-cover"
+        />
+      ) : (
+        <Image
+          src={artwork.src}
+          alt={artwork.alt}
+          fill
+          sizes={sizes}
+          className="object-cover"
+        />
+      )}
     </div>
   );
 }

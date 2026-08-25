@@ -10,6 +10,7 @@ export type MemberShowcase =
       status: ProjectStatus;
       url?: string;
       repository?: string;
+      imageUrl?: string;
     };
 
 export interface MemberPublicPage {
@@ -33,7 +34,7 @@ export interface ResolvedShowcase {
   status: ProjectStatus;
   publicUrl?: string;
   repository?: string;
-  artwork?: { src: string; alt: string };
+  artwork?: { src: string; alt: string; remote?: boolean };
 }
 
 /**
@@ -127,5 +128,12 @@ export function resolveShowcase(
     status: showcase.status,
     publicUrl: showcase.url,
     repository: showcase.repository,
+    artwork: showcase.imageUrl
+      ? {
+          src: showcase.imageUrl,
+          alt: `${showcase.name} showcase artwork`,
+          remote: true,
+        }
+      : undefined,
   };
 }

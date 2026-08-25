@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   query: vi.fn(),
   currentAccount: vi.fn(),
+  openGraphImage: vi.fn(),
 }));
 
 vi.mock("@/lib/auth/config", () => ({ getAuthMode: () => "development" }));
 vi.mock("@/lib/auth/db", () => ({ getDbClient: () => mocks.query }));
 vi.mock("@/lib/auth/session", () => ({
   getCurrentVerifiedAccount: mocks.currentAccount,
+}));
+vi.mock("@/lib/members/open-graph", () => ({
+  findOpenGraphImage: mocks.openGraphImage,
 }));
 
 import {
@@ -41,6 +45,7 @@ describe("member data access authorization", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.currentAccount.mockResolvedValue(MEMBER_ACCOUNT);
+    mocks.openGraphImage.mockResolvedValue(null);
   });
 
   it("requires an administrator before admin mutations can reach SQL", async () => {
@@ -105,6 +110,86 @@ describe("member data access authorization", () => {
     expect(strings.join("?")).toContain("owner_account_id = ?");
     expect(values).toContain("hamfriend");
     expect(values).toContain(MEMBER_ACCOUNT.id);
+  });
+
+  it("stores an Open Graph artwork fallback after authorization", async () => {
+    mocks.openGraphImage.mockResolvedValueOnce("https://cdn.example.com/card.jpg");
+    mocks.query
+      .mockResolvedValueOnce([{ slug: "hamfriend" }])
+      .mockResolvedValueOnce([{ slug: "hamfriend" }]);
+
+    await expect(updateOwnedMemberPage("hamfriend", {
+      displayName: "HAM Friend",
+      blurb: null,
+      websiteUrl: null,
+      showcase: {
+        kind: "external",
+        name: "Weekend Thing",
+        shortDescription: "Made over a weekend.",
+        type: "tool",
+        status: "released",
+        url: "https://example.com/weekend-thing",
+      },
+    })).resolves.toBe("hamfriend");
+
+    expect(mocks.openGraphImage).toHaveBeenCalledWith(
+      "https://example.com/weekend-thing",
+    );
+    expect(mocks.query.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.openGraphImage.mock.invocationCallOrder[0],
+    );
+    const [, ...values] = mocks.query.mock.calls[1];
+    expect(values).toContainEqual({
+      kind: "external",
+      name: "Weekend Thing",
+      shortDescription: "Made over a weekend.",
+      type: "tool",
+      status: "released",
+      url: "https://example.com/weekend-thing",
+      imageUrl: "https://cdn.example.com/card.jpg",
+    });
+  });
+
+  it("does not discover artwork until ownership is verified", async () => {
+    mocks.query.mockResolvedValueOnce([]);
+
+    await expect(updateOwnedMemberPage("somebody-else", {
+      displayName: "Wrong Owner",
+      blurb: null,
+      websiteUrl: null,
+      showcase: {
+        kind: "external",
+        name: "Weekend Thing",
+        shortDescription: "Made over a weekend.",
+        type: "tool",
+        status: "released",
+        url: "https://example.com/weekend-thing",
+      },
+    })).rejects.toMatchObject({ code: "forbidden" });
+
+    expect(mocks.openGraphImage).not.toHaveBeenCalled();
+    expect(mocks.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps explicit artwork and skips Open Graph discovery", async () => {
+    mocks.query.mockResolvedValueOnce([{ slug: "hamfriend" }]);
+
+    await updateOwnedMemberPage("hamfriend", {
+      displayName: "HAM Friend",
+      blurb: null,
+      websiteUrl: null,
+      showcase: {
+        kind: "external",
+        name: "Weekend Thing",
+        shortDescription: "Made over a weekend.",
+        type: "tool",
+        status: "released",
+        url: "https://example.com/weekend-thing",
+        imageUrl: "https://images.example.com/hand-picked.jpg",
+      },
+    });
+
+    expect(mocks.openGraphImage).not.toHaveBeenCalled();
   });
 
   it("fails a forged slug without revealing whether another page exists", async () => {

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
@@ -80,18 +81,64 @@ function WebsiteCallToAction({ website }: { website: string }) {
   );
 }
 
-function MemberIdentity({ member }: { member: MemberPublicPage }) {
+function EditPageLink({
+  member,
+  isEditing,
+}: {
+  member: MemberPublicPage;
+  isEditing: boolean;
+}) {
+  const label = isEditing
+    ? "Jump to the page editor"
+    : `Edit ${member.displayName}'s page`;
+
+  return (
+    <Link
+      href={isEditing ? "#edit-page" : `${memberPath(member.slug)}?edit=1#edit-page`}
+      aria-label={label}
+      title={label}
+      className="inline-flex size-11 shrink-0 -rotate-2 items-center justify-center border-2 border-ink bg-surface text-interactive-blue shadow-[3px_3px_0_0_var(--color-ink)] transition-[transform,background-color,color,box-shadow] hover:-translate-y-0.5 hover:rotate-0 hover:bg-interactive-blue hover:text-paper active:translate-x-0.5 active:translate-y-0.5 active:shadow-none"
+    >
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        className="size-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="m14.7 5.3 4 4" />
+        <path d="M5 19l3.8-.8L19 8a1.9 1.9 0 0 0-3-3L5.8 15.2 5 19Z" />
+      </svg>
+    </Link>
+  );
+}
+
+function MemberIdentity({
+  member,
+  canEdit = false,
+  isEditing = false,
+}: {
+  member: MemberPublicPage;
+  canEdit?: boolean;
+  isEditing?: boolean;
+}) {
   return (
     <div className="max-w-2xl">
       <p className="inline-flex -rotate-1 items-center border-2 border-ink bg-surface px-3 py-1 text-[0.7rem] font-bold tracking-[0.18em] text-ink uppercase shadow-[3px_3px_0_0_var(--color-ink)] sm:text-xs">
         HAM member
       </p>
-      <h1 className="font-display relative mt-7 block w-fit text-4xl leading-[1.12] break-words sm:text-5xl">
-        {member.displayName}
-        <svg aria-hidden="true" viewBox="0 0 120 8" preserveAspectRatio="none" className="absolute -bottom-2 left-0 h-2 w-full text-decorative-red">
-          <path d="M2 5 C 26 1, 42 8, 64 4 S 100 2, 118 6" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
-        </svg>
-      </h1>
+      <div className="mt-7 flex flex-wrap items-center gap-4">
+        <h1 className="font-display relative block w-fit text-4xl leading-[1.12] break-words sm:text-5xl">
+          {member.displayName}
+          <svg aria-hidden="true" viewBox="0 0 120 8" preserveAspectRatio="none" className="absolute -bottom-2 left-0 h-2 w-full text-decorative-red">
+            <path d="M2 5 C 26 1, 42 8, 64 4 S 100 2, 118 6" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          </svg>
+        </h1>
+        {canEdit ? <EditPageLink member={member} isEditing={isEditing} /> : null}
+      </div>
       {member.blurb ? <p className="mt-8 text-lg leading-relaxed text-muted">{member.blurb}</p> : null}
       {member.websiteUrl ? <WebsiteCallToAction website={member.websiteUrl} /> : null}
     </div>
@@ -100,37 +147,32 @@ function MemberIdentity({ member }: { member: MemberPublicPage }) {
 
 export default async function MemberPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ member: string }>;
+  searchParams: Promise<{ edit?: string | string[] }>;
 }) {
   await connection();
   const { member: slug } = await params;
+  const query = await searchParams;
   const result = await getMemberPageForViewer(slug);
   if (!result) notFound();
 
   const showcase = resolveShowcase(result.page.showcase);
+  const isEditing = result.isOwner && query.edit === "1";
   return (
     <>
       <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-12 pb-20 sm:px-8 sm:pt-16">
-        {result.isOwner ? (
-          <div className="mb-10 flex flex-wrap items-center justify-between gap-4 border-2 border-ink bg-surface px-4 py-3 shadow-[4px_4px_0_0_var(--color-ink)]">
-            <p className="font-bold">
-              {result.isPublished ? "This page is public." : "Only you and administrators can see this unpublished page."}
-            </p>
-            <a href="#edit-page" className="inline-flex min-h-11 items-center font-bold text-interactive-blue underline underline-offset-4">Edit page</a>
-          </div>
-        ) : null}
-
         {showcase ? (
           <div className="lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-14">
-            <MemberIdentity member={result.page} />
+            <MemberIdentity member={result.page} canEdit={result.isOwner} isEditing={isEditing} />
             <ShowcasePanel showcase={showcase} />
           </div>
         ) : (
-          <MemberIdentity member={result.page} />
+          <MemberIdentity member={result.page} canEdit={result.isOwner} isEditing={isEditing} />
         )}
 
-        {result.isOwner ? <MemberEditor member={result.page} /> : null}
+        {isEditing ? <MemberEditor member={result.page} /> : null}
       </main>
       <SiteFooter />
     </>
