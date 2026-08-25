@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 /**
  * The footer rule and credit line.
  *
@@ -8,8 +10,22 @@
 export function SiteFooter() {
   return (
     <footer className="mx-auto w-full max-w-5xl px-5 pb-12 sm:px-8">
-      <div className="border-t-2 border-ink pt-6 text-sm tracking-wide text-muted">
-        teamham.world &#183; made by HAM
+      <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-4 border-t-2 border-ink pt-6 text-sm tracking-wide text-muted">
+        <p>teamham.world &#183; made by HAM</p>
+        <nav aria-label="Legal" className="flex items-center gap-4 font-bold">
+          <Link
+            href="/privacy"
+            className="text-interactive-blue underline decoration-2 underline-offset-4"
+          >
+            Privacy
+          </Link>
+          <Link
+            href="/terms"
+            className="text-interactive-blue underline decoration-2 underline-offset-4"
+          >
+            Terms
+          </Link>
+        </nav>
       </div>
     </footer>
   );

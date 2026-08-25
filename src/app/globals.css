@@ -112,6 +112,32 @@ body::before {
   letter-spacing: -0.015em;
 }
 
+/* Long-form policy copy keeps one calm rhythm inside the scrapbook shell. */
+.legal-copy > * + * {
+  margin-top: 1rem;
+}
+
+.legal-copy ul {
+  list-style: disc;
+  padding-left: 1.35rem;
+}
+
+.legal-copy li + li {
+  margin-top: 0.7rem;
+}
+
+.legal-copy strong {
+  color: var(--color-ink);
+}
+
+.legal-copy a {
+  color: var(--color-interactive-blue);
+  font-weight: 700;
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
 /*
  * Card/panel rotation is disabled below 400px (BRAND.md §5). Stamps use
  * .stamp-tilt instead and keep their restrained rotation at every width.

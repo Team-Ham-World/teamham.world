@@ -158,6 +158,23 @@ export default async function AccountPage() {
                     Discord) or contact TeamHam.
                   </li>
                 </ul>
+                <p className="mt-5 border-t border-ink/30 pt-4 text-sm leading-relaxed text-muted">
+                  Read the full{" "}
+                  <Link
+                    href="/privacy"
+                    className="font-bold text-interactive-blue underline underline-offset-4"
+                  >
+                    Privacy Policy
+                  </Link>{" "}
+                  and{" "}
+                  <Link
+                    href="/terms"
+                    className="font-bold text-interactive-blue underline underline-offset-4"
+                  >
+                    Terms of Service
+                  </Link>
+                  .
+                </p>
               </section>
 
               <div className="mt-8 flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
