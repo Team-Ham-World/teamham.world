@@ -21,6 +21,7 @@ const MEMBER = {
   displayName: "CyR1en",
   blurb: "This is a test",
   websiteUrl: null,
+  socialLinks: {},
   showcase: null,
 };
 
@@ -69,5 +70,34 @@ describe("member page edit mode", () => {
 
     expect(html).not.toContain("data-member-editor");
     expect(html).not.toContain("?edit=1#edit-page");
+  });
+
+  it("renders labeled SVG social stickers beside the site link", async () => {
+    vi.mocked(memberDal.getMemberPageForViewer).mockResolvedValueOnce({
+      page: {
+        ...MEMBER,
+        websiteUrl: "https://cyr1en.example",
+        socialLinks: {
+          github: "https://github.com/cyr1en",
+          mastodon: "https://social.example/@cyr1en",
+        },
+      },
+      isOwner: false,
+      isPublished: true,
+    });
+
+    const page = await MemberPage({
+      params: Promise.resolve({ member: MEMBER.slug }),
+      searchParams: Promise.resolve({}),
+    });
+    const html = renderToStaticMarkup(page);
+
+    expect(html).toContain("Visit site");
+    expect(html).toContain('href="https://github.com/cyr1en"');
+    expect(html).toContain('aria-label="Visit CyR1en on GitHub"');
+    expect(html).toContain('href="https://social.example/@cyr1en"');
+    expect(html).toContain('aria-label="Visit CyR1en on Mastodon"');
+    expect(html.match(/<svg/g)).not.toHaveLength(0);
+    expect(html.indexOf("Visit site")).toBeLessThan(html.indexOf("Visit CyR1en on GitHub"));
   });
 });

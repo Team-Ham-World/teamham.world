@@ -23,6 +23,7 @@ interface MemberPageRow {
   display_name: unknown;
   blurb: unknown;
   website_url: unknown;
+  social_links: unknown;
   showcase: unknown;
   owner_account_id?: unknown;
   is_published?: unknown;
@@ -119,6 +120,7 @@ function parsePublicPage(row: MemberPageRow): MemberPublicPage {
     displayName: row.display_name,
     blurb: row.blurb,
     websiteUrl: row.website_url,
+    socialLinks: row.social_links,
     showcase: row.showcase,
   });
   if (!content.success) {
@@ -181,6 +183,7 @@ const readMemberPageForViewer = async (
       display_name,
       blurb,
       website_url,
+      social_links,
       showcase,
       owner_account_id,
       is_published
@@ -357,6 +360,7 @@ export async function createMemberPage(input: {
     displayName: input.displayName,
     blurb: null,
     websiteUrl: null,
+    socialLinks: {},
     showcase: null,
   });
   const errors: MemberFieldErrors = {};
@@ -460,6 +464,7 @@ export async function updateOwnedMemberPage(
       display_name = ${content.data.displayName},
       blurb = ${content.data.blurb},
       website_url = ${content.data.websiteUrl},
+      social_links = ${content.data.socialLinks},
       showcase = ${showcase},
       updated_at = NOW()
     WHERE slug = ${slug}

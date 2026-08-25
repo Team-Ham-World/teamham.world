@@ -260,7 +260,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migrations 0001 through 0005
+    // 2. Clean existing tables and apply migrations 0001 through 0006
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_pages CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.puff_flappy_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_access_tokens CASCADE;`);
@@ -289,6 +289,10 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     const migration0005Path = path.resolve(__dirname, '../../migrations/0005_member_pages.sql');
     const migration0005Sql = fs.readFileSync(migration0005Path, 'utf8');
     await ownerPool.query(migration0005Sql);
+
+    const migration0006Path = path.resolve(__dirname, '../../migrations/0006_member_social_links.sql');
+    const migration0006Sql = fs.readFileSync(migration0006Path, 'utf8');
+    await ownerPool.query(migration0006Sql);
 
     // 3. Connect as runtime role
     runtimeUrl = buildRuntimeUrl(rawTestDbUrl, TEST_RUNTIME_PASSWORD);
@@ -3038,7 +3042,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       return result.rows[0].id;
     }
 
-    it('enforces page identity, URL, showcase, and one-page-per-owner constraints', async () => {
+    it('enforces page identity, URL, social-link, showcase, and one-page-per-owner constraints', async () => {
       const adminId = await createAccount(991, 'admin');
       const ownerId = await createAccount(992);
 
@@ -3071,6 +3075,15 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await expect(
         ownerPool.query(
           `INSERT INTO public.member_pages (
+             owner_account_id, created_by_account_id, slug, display_name, social_links
+           ) VALUES ($1, $2, 'bad-socials', 'Bad Socials', '[]'::jsonb)`,
+          [otherOwnerId, adminId]
+        )
+      ).rejects.toThrow();
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_pages (
              owner_account_id, created_by_account_id, slug, display_name, website_url
            ) VALUES ($1, $2, 'bad-url', 'Bad URL', 'http://example.com')`,
           [otherOwnerId, adminId]
@@ -3094,6 +3107,9 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         can_select_creator: boolean;
         can_insert_owner: boolean;
         can_update_content: boolean;
+        can_select_social_links: boolean;
+        can_update_social_links: boolean;
+        can_insert_social_links: boolean;
         can_update_slug: boolean;
         can_delete_pages: boolean;
         can_update_role: boolean;
@@ -3104,6 +3120,9 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
           has_column_privilege(current_user, 'public.member_pages', 'created_by_account_id', 'SELECT') AS can_select_creator,
           has_column_privilege(current_user, 'public.member_pages', 'owner_account_id', 'INSERT') AS can_insert_owner,
           has_column_privilege(current_user, 'public.member_pages', 'display_name', 'UPDATE') AS can_update_content,
+          has_column_privilege(current_user, 'public.member_pages', 'social_links', 'SELECT') AS can_select_social_links,
+          has_column_privilege(current_user, 'public.member_pages', 'social_links', 'UPDATE') AS can_update_social_links,
+          has_column_privilege(current_user, 'public.member_pages', 'social_links', 'INSERT') AS can_insert_social_links,
           has_column_privilege(current_user, 'public.member_pages', 'slug', 'UPDATE') AS can_update_slug,
           has_table_privilege(current_user, 'public.member_pages', 'DELETE') AS can_delete_pages,
           has_column_privilege(current_user, 'public.accounts', 'site_role', 'UPDATE') AS can_update_role
@@ -3114,6 +3133,9 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         can_select_creator: false,
         can_insert_owner: true,
         can_update_content: true,
+        can_select_social_links: true,
+        can_update_social_links: true,
+        can_insert_social_links: false,
         can_update_slug: false,
         can_delete_pages: false,
         can_update_role: false,

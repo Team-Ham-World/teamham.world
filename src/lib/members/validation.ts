@@ -3,11 +3,16 @@ import {
   isValidMemberSlug,
   type MemberShowcase,
 } from "@/lib/members/model";
+import {
+  SOCIAL_PLATFORMS,
+  type MemberSocialLinks,
+} from "@/lib/members/socials";
 
 export const MEMBER_LIMITS = {
   displayName: 80,
   blurb: 500,
   websiteUrl: 2048,
+  socialUrl: 2048,
   showcaseName: 80,
   showcaseDescription: 500,
   showcaseType: 80,
@@ -28,6 +33,7 @@ export type MemberField =
   | "displayName"
   | "blurb"
   | "websiteUrl"
+  | "socialLinks"
   | "showcase";
 
 export type MemberFieldErrors = Partial<Record<MemberField, string>>;
@@ -36,6 +42,7 @@ export interface MemberContentInput {
   displayName: string;
   blurb: string | null;
   websiteUrl: string | null;
+  socialLinks: MemberSocialLinks;
   showcase: MemberShowcase | null;
 }
 
@@ -78,6 +85,20 @@ function parseOptionalHttpsUrl(
   if (normalized === null || normalized === undefined) return normalized;
   if (normalized.length > maximum || !isHttpsUrl(normalized)) return undefined;
   return normalized;
+}
+
+export function parseMemberSocialLinks(value: unknown): MemberSocialLinks | null {
+  if (value === null || value === undefined) return {};
+  if (!isPlainObject(value)) return null;
+  if (!hasOnlyKeys(value, SOCIAL_PLATFORMS.map(({ id }) => id))) return null;
+
+  const socialLinks: MemberSocialLinks = {};
+  for (const platform of SOCIAL_PLATFORMS) {
+    const url = parseOptionalHttpsUrl(value[platform.id], MEMBER_LIMITS.socialUrl);
+    if (url === undefined) return null;
+    if (url) socialLinks[platform.id] = url;
+  }
+  return socialLinks;
 }
 
 export function parseMemberShowcase(value: unknown): MemberShowcase | null {
@@ -160,6 +181,7 @@ export function validateMemberContent(
     input.websiteUrl,
     MEMBER_LIMITS.websiteUrl,
   );
+  const socialLinks = parseMemberSocialLinks(input.socialLinks);
 
   if (!displayName) {
     errors.displayName = "Enter a display name.";
@@ -175,6 +197,10 @@ export function validateMemberContent(
     errors.websiteUrl = "Enter a complete https:// URL or leave this blank.";
   }
 
+  if (!socialLinks) {
+    errors.socialLinks = "Use complete https:// profile URLs or leave them blank.";
+  }
+
   const showcase = parseMemberShowcase(input.showcase);
   if (input.showcase !== null && input.showcase !== undefined && !showcase) {
     errors.showcase = "Complete the selected showcase with valid links.";
@@ -188,6 +214,7 @@ export function validateMemberContent(
       displayName,
       blurb: blurb ?? null,
       websiteUrl: websiteUrl ?? null,
+      socialLinks: socialLinks ?? {},
       showcase,
     },
   };
@@ -224,10 +251,14 @@ export function showcaseFromFormData(formData: FormData): unknown {
 }
 
 export function memberContentFromFormData(formData: FormData) {
+  const socialLinks = Object.fromEntries(
+    SOCIAL_PLATFORMS.map(({ id, formName }) => [id, formData.get(formName)]),
+  );
   return {
     displayName: formData.get("displayName"),
     blurb: formData.get("blurb"),
     websiteUrl: formData.get("websiteUrl"),
+    socialLinks,
     showcase: showcaseFromFormData(formData),
   };
 }

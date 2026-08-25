@@ -6,6 +6,7 @@ import { connection } from "next/server";
 import { MemberEditor } from "@/components/member-editor";
 import { ProjectArtwork, StatusStamp } from "@/components/project-visuals";
 import { SiteFooter } from "@/components/site-footer";
+import { MemberSocialLinks } from "@/components/social-links";
 import { getMemberPageForViewer } from "@/lib/members/dal";
 import {
   resolveShowcase,
@@ -67,7 +68,7 @@ function ShowcasePanel({ showcase }: { showcase: ResolvedShowcase }) {
 function WebsiteCallToAction({ website }: { website: string }) {
   const hostname = displayHostname(website);
   return (
-    <div className="mt-9">
+    <div>
       <a
         href={website}
         rel="noopener noreferrer"
@@ -77,6 +78,25 @@ function WebsiteCallToAction({ website }: { website: string }) {
         Visit site <span aria-hidden="true">&#8594;</span>
       </a>
       {hostname ? <p className="mt-3 text-xs font-bold tracking-[0.14em] text-muted lowercase">{hostname}</p> : null}
+    </div>
+  );
+}
+
+function MemberLinks({ member }: { member: MemberPublicPage }) {
+  const hasSocialLinks = Object.keys(member.socialLinks).length > 0;
+  if (!member.websiteUrl && !hasSocialLinks) return null;
+
+  return (
+    <div className="mt-9 flex flex-wrap items-start gap-4">
+      {member.websiteUrl ? (
+        <WebsiteCallToAction website={member.websiteUrl} />
+      ) : null}
+      {hasSocialLinks ? (
+        <MemberSocialLinks
+          displayName={member.displayName}
+          links={member.socialLinks}
+        />
+      ) : null}
     </div>
   );
 }
@@ -140,7 +160,7 @@ function MemberIdentity({
         {canEdit ? <EditPageLink member={member} isEditing={isEditing} /> : null}
       </div>
       {member.blurb ? <p className="mt-8 text-lg leading-relaxed text-muted">{member.blurb}</p> : null}
-      {member.websiteUrl ? <WebsiteCallToAction website={member.websiteUrl} /> : null}
+      <MemberLinks member={member} />
     </div>
   );
 }

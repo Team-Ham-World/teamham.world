@@ -8,6 +8,8 @@ import {
 } from "@/lib/members/model";
 import {
   MEMBER_LIMITS,
+  memberContentFromFormData,
+  parseMemberSocialLinks,
   parseMemberShowcase,
   validateMemberContent,
 } from "@/lib/members/validation";
@@ -83,6 +85,7 @@ describe("member model and validation", () => {
       displayName: "  HAM Friend  ",
       blurb: "",
       websiteUrl: "",
+      socialLinks: {},
       showcase: null,
     })).toEqual({
       success: true,
@@ -90,6 +93,7 @@ describe("member model and validation", () => {
         displayName: "HAM Friend",
         blurb: null,
         websiteUrl: null,
+        socialLinks: {},
         showcase: null,
       },
     });
@@ -98,6 +102,7 @@ describe("member model and validation", () => {
       displayName: "x".repeat(MEMBER_LIMITS.displayName + 1),
       blurb: "x".repeat(MEMBER_LIMITS.blurb + 1),
       websiteUrl: "http://example.com",
+      socialLinks: {},
       showcase: null,
     });
     expect(invalid.success).toBe(false);
@@ -108,6 +113,32 @@ describe("member model and validation", () => {
         websiteUrl: expect.any(String),
       });
     }
+  });
+
+  it("strictly parses supported HTTPS social links", () => {
+    expect(parseMemberSocialLinks({
+      github: "  https://github.com/ham-friend  ",
+      bluesky: "",
+      mastodon: null,
+    })).toEqual({ github: "https://github.com/ham-friend" });
+
+    expect(parseMemberSocialLinks({ github: "http://github.com/ham-friend" })).toBeNull();
+    expect(parseMemberSocialLinks({ myspace: "https://example.com/ham-friend" })).toBeNull();
+    expect(parseMemberSocialLinks([])).toBeNull();
+  });
+
+  it("collects every supported social field from the owner form", () => {
+    const formData = new FormData();
+    formData.set("displayName", "HAM Friend");
+    formData.set("socialGithub", "https://github.com/ham-friend");
+    formData.set("socialMastodon", "https://social.example/@ham-friend");
+
+    expect(memberContentFromFormData(formData)).toMatchObject({
+      socialLinks: {
+        github: "https://github.com/ham-friend",
+        mastodon: "https://social.example/@ham-friend",
+      },
+    });
   });
 
   it("resolves HAM projects and passes external showcases to the renderer", () => {

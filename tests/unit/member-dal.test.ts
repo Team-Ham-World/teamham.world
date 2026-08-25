@@ -102,6 +102,7 @@ describe("member data access authorization", () => {
       displayName: "HAM Friend",
       blurb: "Makes tiny tools.",
       websiteUrl: "https://hamfriend.example",
+      socialLinks: { github: "https://github.com/hamfriend" },
       showcase: null,
     })).resolves.toBe("hamfriend");
 
@@ -110,6 +111,7 @@ describe("member data access authorization", () => {
     expect(strings.join("?")).toContain("owner_account_id = ?");
     expect(values).toContain("hamfriend");
     expect(values).toContain(MEMBER_ACCOUNT.id);
+    expect(values).toContainEqual({ github: "https://github.com/hamfriend" });
   });
 
   it("stores an Open Graph artwork fallback after authorization", async () => {
@@ -122,6 +124,7 @@ describe("member data access authorization", () => {
       displayName: "HAM Friend",
       blurb: null,
       websiteUrl: null,
+      socialLinks: {},
       showcase: {
         kind: "external",
         name: "Weekend Thing",
@@ -157,6 +160,7 @@ describe("member data access authorization", () => {
       displayName: "Wrong Owner",
       blurb: null,
       websiteUrl: null,
+      socialLinks: {},
       showcase: {
         kind: "external",
         name: "Weekend Thing",
@@ -178,6 +182,7 @@ describe("member data access authorization", () => {
       displayName: "HAM Friend",
       blurb: null,
       websiteUrl: null,
+      socialLinks: {},
       showcase: {
         kind: "external",
         name: "Weekend Thing",
@@ -198,6 +203,7 @@ describe("member data access authorization", () => {
       displayName: "Wrong Owner",
       blurb: null,
       websiteUrl: null,
+      socialLinks: {},
       showcase: null,
     })).rejects.toMatchObject({ code: "forbidden" });
   });
@@ -224,6 +230,7 @@ describe("member data access authorization", () => {
       display_name: "HAM Friend",
       blurb: null,
       website_url: "http://insecure.example",
+      social_links: {},
       showcase: null,
       owner_account_id: MEMBER_ACCOUNT.id,
       is_published: true,

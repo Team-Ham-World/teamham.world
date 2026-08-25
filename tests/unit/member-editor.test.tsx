@@ -14,6 +14,10 @@ const MEMBER: MemberPublicPage = {
   displayName: "CyR1en",
   blurb: "Builds strange and useful things.",
   websiteUrl: null,
+  socialLinks: {
+    github: "https://github.com/cyr1en",
+    bluesky: "https://bsky.app/profile/cyr1en.example",
+  },
   showcase: null,
 };
 
@@ -24,6 +28,26 @@ function renderEditor(showcase: MemberShowcase | null) {
 }
 
 describe("member editor showcase fields", () => {
+  it("offers every supported social profile and preserves saved URLs", () => {
+    const html = renderEditor(null);
+
+    for (const platform of [
+      "GitHub",
+      "Bluesky",
+      "Mastodon",
+      "Instagram",
+      "YouTube",
+      "Twitch",
+      "X",
+    ]) {
+      expect(html).toContain(platform);
+    }
+    expect(html).toContain('name="socialGithub"');
+    expect(html).toContain('value="https://github.com/cyr1en"');
+    expect(html).toContain('name="socialBluesky"');
+    expect(html).toContain('value="https://bsky.app/profile/cyr1en.example"');
+  });
+
   it("shows only the HAM project picker for a HAM project", () => {
     const html = renderEditor({
       kind: "project",

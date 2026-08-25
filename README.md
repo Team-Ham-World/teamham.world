@@ -64,6 +64,7 @@ The VPS test database is isolated from Neon and is not publicly exposed. See
 - `src/components/` - Shared server and client UI
 - `src/data/projects.ts` - Typed public project catalog
 - `migrations/0005_member_pages.sql` - Member roles and page storage
+- `migrations/0006_member_social_links.sql` - Member-owned social profiles
 - `src/app/fonts/` - Drop point for the approved WOFF2 files (see its README)
 
 ## Member pages
@@ -79,15 +80,17 @@ An administrator creates, assigns, publishes, and unpublishes pages at
 checks the exact role or owner in the server-only data layer; `proxy.ts` is not
 an authorization boundary for these operations.
 
-Apply `migrations/0005_member_pages.sql` before deploying dependent code, using
-`docs/NEON_MIGRATIONS.md`. The migration does not appoint an administrator.
+Apply `migrations/0005_member_pages.sql` and then
+`migrations/0006_member_social_links.sql` before deploying dependent code,
+using `docs/NEON_MIGRATIONS.md`. The migrations do not appoint an administrator.
 Bootstrap the first `accounts.site_role = 'admin'` in a separately reviewed
 owner transaction; the application runtime role cannot change that column.
 
-Page content supports a display name, optional blurb and HTTPS website, and an
-optional HAM-project or external-project showcase. External artwork is not
-editable in v1. Unknown and unpublished pages share the branded 404 for anyone
-other than the assigned owner.
+Page content supports a display name, optional blurb and HTTPS website, supported
+social profiles, and an optional HAM-project or external-project showcase.
+External showcase artwork can use an HTTPS image URL or a discovered Open Graph
+image. Unknown and unpublished pages share the branded 404 for anyone other than
+the assigned owner.
 
 When `AUTH_MODE=disabled`, database-backed member reads return an empty public
 preview and the protected/member discovery routes expose no member content.

@@ -1,4 +1,5 @@
 import { PROJECTS, type Project, type ProjectStatus } from "@/data/projects";
+import type { MemberSocialLinks } from "@/lib/members/socials";
 
 export type MemberShowcase =
   | { kind: "project"; projectSlug: string }
@@ -18,6 +19,7 @@ export interface MemberPublicPage {
   displayName: string;
   blurb: string | null;
   websiteUrl: string | null;
+  socialLinks: MemberSocialLinks;
   showcase: MemberShowcase | null;
 }
 

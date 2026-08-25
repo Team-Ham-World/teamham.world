@@ -49,9 +49,9 @@ The first release preserves the existing member-page content model:
 
 - display name;
 - short introduction;
-- optional absolute HTTPS website URL; and
-- optional single showcase, either a registered HAM project or an external project; and
-- optional absolute HTTPS artwork URL for an external showcase. When it is blank and the external project has a URL, saving makes a best-effort attempt to discover and persist that page's Open Graph image.
+- optional absolute HTTPS website URL;
+- optional HTTPS social-profile links for the supported platforms; and
+- optional single showcase, either a registered HAM project or an external project. An external showcase may have an absolute HTTPS artwork URL; when it is blank and the project has a URL, saving makes a best-effort attempt to discover and persist that page's Open Graph image.
 
 Slugs, ownership, and publication state are administrator-managed. Slugs are lowercase DNS labels, must not be reserved, and are immutable after creation in v1.
 
@@ -63,6 +63,7 @@ Slugs, ownership, and publication state are administrator-managed. Slugs are low
 - Public reads return only published content and never expose account IDs, Discord IDs, roles, or administrative metadata.
 - Text is plain text; rich HTML and Markdown are not accepted.
 - All URLs are validated server-side as absolute HTTPS URLs.
+- Social links are limited to the server-defined platform set and render as labeled, keyboard-accessible logo links near the personal-site action.
 - Open Graph discovery is optional, follows only a small number of validated HTTPS redirects, and must reject loopback, private, link-local, and reserved destinations. A discovery failure does not fail the member-page save.
 - Content length limits are enforced in both the form and the server-side write path.
 - The member directory is generated from published pages rather than `src/data/members.ts`.
@@ -82,6 +83,7 @@ Slugs, ownership, and publication state are administrator-managed. Slugs are low
 - An administrator can create and assign a page to an eligible account.
 - A non-administrator cannot create, assign, publish, or unpublish a page.
 - The assigned member can edit their page from `/m/<slug>` and see the saved result.
+- The assigned member can add or remove supported social links, and public visitors can identify every logo link through its accessible name.
 - That member cannot edit another slug, including by submitting a modified request.
 - An administrator who is not the owner cannot use the member edit action for that page.
 - Published pages, the homepage preview, and `/members` work for signed-out visitors.

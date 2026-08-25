@@ -8,8 +8,10 @@ import {
   type MemberEditorState,
 } from "@/app/m/[member]/actions";
 import { FormSubmitButton } from "@/components/form-submit-button";
+import { SocialIcon } from "@/components/social-links";
 import { PROJECTS, STATUS_LABELS, type ProjectStatus } from "@/data/projects";
 import type { MemberPublicPage } from "@/lib/members/model";
+import { SOCIAL_PLATFORMS } from "@/lib/members/socials";
 import { MEMBER_LIMITS } from "@/lib/members/validation";
 import { memberPath } from "@/lib/site";
 
@@ -137,6 +139,43 @@ export function MemberEditor({ member }: { member: MemberPublicPage }) {
           />
           <FieldError id="websiteUrl-error" message={state.fieldErrors.websiteUrl} />
         </div>
+
+        <fieldset
+          aria-describedby={`social-links-help${state.fieldErrors.socialLinks ? " social-links-error" : ""}`}
+          className="border-2 border-ink bg-surface p-5 sm:p-6"
+        >
+          <legend className="px-2 font-display text-xl">Find me online</legend>
+          <p id="social-links-help" className="text-sm leading-relaxed text-muted">
+            Add any profiles you want visitors to find. Paste the complete
+            https:// address and leave everything else blank.
+          </p>
+          <div className="mt-5 grid gap-x-5 gap-y-4 sm:grid-cols-2">
+            {SOCIAL_PLATFORMS.map((platform) => (
+              <div key={platform.id}>
+                <label
+                  htmlFor={`social-${platform.id}`}
+                  className="inline-flex items-center gap-2 font-bold"
+                >
+                  <span className="inline-flex size-7 -rotate-2 items-center justify-center border-2 border-ink bg-paper shadow-[2px_2px_0_0_var(--color-ink)]">
+                    <SocialIcon platform={platform.id} className="size-3.5" />
+                  </span>
+                  {platform.label}
+                </label>
+                <input
+                  id={`social-${platform.id}`}
+                  name={platform.formName}
+                  type="url"
+                  inputMode="url"
+                  maxLength={MEMBER_LIMITS.socialUrl}
+                  placeholder={platform.placeholder}
+                  defaultValue={member.socialLinks[platform.id] ?? ""}
+                  className={INPUT_CLASS}
+                />
+              </div>
+            ))}
+          </div>
+          <FieldError id="social-links-error" message={state.fieldErrors.socialLinks} />
+        </fieldset>
 
         <fieldset className="border-2 border-ink bg-surface p-5 sm:p-6">
           <legend className="px-2 font-display text-xl">Showcase</legend>
