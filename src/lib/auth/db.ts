@@ -6,6 +6,7 @@ import {
   isValidTokenHash,
   isValidUuid,
 } from './crypto';
+import { isSiteRole, type SiteRole } from './roles';
 
 export interface VerifiedAccount {
   id: string;
@@ -14,6 +15,8 @@ export interface VerifiedAccount {
   expiresAt: string | Date;
   /** Display-only Discord username; null when none was captured at login. */
   username: string | null;
+  /** Site-wide authorization role; never writable by the runtime role. */
+  siteRole: SiteRole;
 }
 
 export type SessionVerificationResult =
@@ -111,6 +114,7 @@ export async function verifySession(
         a.access_status,
         a.membership_status,
         a.discord_username,
+        a.site_role,
         s.expires_at
     FROM public.sessions s
     JOIN public.accounts a ON s.account_id = a.id
@@ -124,6 +128,7 @@ export async function verifySession(
     access_status: string;
     membership_status: string;
     discord_username: string | null;
+    site_role: string;
     expires_at: string | Date;
   }>;
 
@@ -133,6 +138,7 @@ export async function verifySession(
       isValidUuid(row.account_id) &&
       row.access_status === 'active' &&
       row.membership_status === 'eligible' &&
+      isSiteRole(row.site_role) &&
       isValidTimestamp(row.expires_at)
     ) {
       return {
@@ -145,6 +151,7 @@ export async function verifySession(
           // Cosmetic field: an unreadable username degrades to null instead of
           // failing an otherwise valid session.
           username: isValidDiscordUsername(row.discord_username) ? row.discord_username : null,
+          siteRole: row.site_role,
         },
       };
     }

@@ -61,6 +61,7 @@ SELECT
     a.access_status,
     a.membership_status,
     a.discord_username,
+    a.site_role,
     s.expires_at
 FROM public.sessions s
 JOIN public.accounts a ON s.account_id = a.id
@@ -259,7 +260,8 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migrations 0001 through 0004
+    // 2. Clean existing tables and apply migrations 0001 through 0005
+    await ownerPool.query(`DROP TABLE IF EXISTS public.member_pages CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.puff_flappy_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_access_tokens CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_authorization_codes CASCADE;`);
@@ -284,6 +286,10 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     const migration0004Sql = fs.readFileSync(migration0004Path, 'utf8');
     await ownerPool.query(migration0004Sql);
 
+    const migration0005Path = path.resolve(__dirname, '../../migrations/0005_member_pages.sql');
+    const migration0005Sql = fs.readFileSync(migration0005Path, 'utf8');
+    await ownerPool.query(migration0005Sql);
+
     // 3. Connect as runtime role
     runtimeUrl = buildRuntimeUrl(rawTestDbUrl, TEST_RUNTIME_PASSWORD);
     runtimePool = new Pool({
@@ -304,6 +310,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
   beforeEach(async () => {
     if (!ownerPool) return;
     // Clear data between tests to ensure test isolation in FK-safe order
+    await ownerPool.query('DELETE FROM public.member_pages;');
     await ownerPool.query('DELETE FROM public.puff_flappy_scores;');
     await ownerPool.query('DELETE FROM public.game_access_tokens;');
     await ownerPool.query('DELETE FROM public.game_authorization_codes;');
@@ -785,6 +792,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         account_id: string;
         access_status: string;
         membership_status: string;
+        site_role: string;
         expires_at: Date;
       }>(SQL_SESSION_VERIFICATION, [tokenHash]);
 
@@ -792,6 +800,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       expect(verifyRes.rows[0].account_id).toBe(accountId);
       expect(verifyRes.rows[0].access_status).toBe('active');
       expect(verifyRes.rows[0].membership_status).toBe('eligible');
+      expect(verifyRes.rows[0].site_role).toBe('member');
     });
 
     it('rejects expired session (expires_at <= NOW())', async () => {
@@ -1383,6 +1392,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         if (verifyRes.valid) {
           expect(verifyRes.account.accessStatus).toBe('active');
           expect(verifyRes.account.membershipStatus).toBe('eligible');
+          expect(verifyRes.account.siteRole).toBe('member');
         }
 
         // 3. Delete session through runtime adapter
@@ -3009,6 +3019,110 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         personalBest: 11,
         scores: [{ rank: 1, username: 'puffpilot', score: 11, mine: true }],
       });
+    });
+  });
+
+  describe('14. Member Pages Schema and Least Privilege', () => {
+    async function createAccount(idSuffix: number, siteRole: 'member' | 'admin' = 'member') {
+      const result = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.accounts (
+           discord_user_id,
+           membership_status,
+           access_status,
+           membership_checked_at,
+           site_role
+         ) VALUES ($1, 'eligible', 'active', NOW(), $2)
+         RETURNING id`,
+        [makeDiscordId(idSuffix), siteRole]
+      );
+      return result.rows[0].id;
+    }
+
+    it('enforces page identity, URL, showcase, and one-page-per-owner constraints', async () => {
+      const adminId = await createAccount(991, 'admin');
+      const ownerId = await createAccount(992);
+
+      await runtimePool.query(
+        `INSERT INTO public.member_pages (
+           owner_account_id, created_by_account_id, slug, display_name, website_url, showcase
+         ) VALUES ($1, $2, 'ham-friend', 'HAM Friend', 'https://example.com', $3::jsonb)`,
+        [ownerId, adminId, JSON.stringify({ kind: 'project', projectSlug: 'untitled-quiz-show' })]
+      );
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_pages (
+             owner_account_id, created_by_account_id, slug, display_name
+           ) VALUES ($1, $2, 'another-page', 'Duplicate Owner')`,
+          [ownerId, adminId]
+        )
+      ).rejects.toMatchObject({ code: '23505' });
+
+      const otherOwnerId = await createAccount(993);
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_pages (
+             owner_account_id, created_by_account_id, slug, display_name
+           ) VALUES ($1, $2, 'UPPERCASE', 'Bad Slug')`,
+          [otherOwnerId, adminId]
+        )
+      ).rejects.toThrow();
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_pages (
+             owner_account_id, created_by_account_id, slug, display_name, website_url
+           ) VALUES ($1, $2, 'bad-url', 'Bad URL', 'http://example.com')`,
+          [otherOwnerId, adminId]
+        )
+      ).rejects.toThrow();
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_pages (
+             owner_account_id, created_by_account_id, slug, display_name, showcase
+           ) VALUES ($1, $2, 'bad-json', 'Bad JSON', '[]'::jsonb)`,
+          [otherOwnerId, adminId]
+        )
+      ).rejects.toThrow();
+    });
+
+    it('allows required page operations but denies role changes, slug changes, and deletes', async () => {
+      const privileges = await runtimePool.query<{
+        can_select_pages_table: boolean;
+        can_select_slug: boolean;
+        can_select_creator: boolean;
+        can_insert_owner: boolean;
+        can_update_content: boolean;
+        can_update_slug: boolean;
+        can_delete_pages: boolean;
+        can_update_role: boolean;
+      }>(`
+        SELECT
+          has_table_privilege(current_user, 'public.member_pages', 'SELECT') AS can_select_pages_table,
+          has_column_privilege(current_user, 'public.member_pages', 'slug', 'SELECT') AS can_select_slug,
+          has_column_privilege(current_user, 'public.member_pages', 'created_by_account_id', 'SELECT') AS can_select_creator,
+          has_column_privilege(current_user, 'public.member_pages', 'owner_account_id', 'INSERT') AS can_insert_owner,
+          has_column_privilege(current_user, 'public.member_pages', 'display_name', 'UPDATE') AS can_update_content,
+          has_column_privilege(current_user, 'public.member_pages', 'slug', 'UPDATE') AS can_update_slug,
+          has_table_privilege(current_user, 'public.member_pages', 'DELETE') AS can_delete_pages,
+          has_column_privilege(current_user, 'public.accounts', 'site_role', 'UPDATE') AS can_update_role
+      `);
+      expect(privileges.rows[0]).toEqual({
+        can_select_pages_table: false,
+        can_select_slug: true,
+        can_select_creator: false,
+        can_insert_owner: true,
+        can_update_content: true,
+        can_update_slug: false,
+        can_delete_pages: false,
+        can_update_role: false,
+      });
+
+      const accountId = await createAccount(994);
+      await expect(
+        runtimePool.query(`UPDATE public.accounts SET site_role = 'admin' WHERE id = $1`, [accountId])
+      ).rejects.toMatchObject({ code: '42501' });
     });
   });
 });

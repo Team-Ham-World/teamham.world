@@ -3,6 +3,8 @@ import { headers } from "next/headers";
 import Link from "next/link";
 
 import { SiteFooter } from "@/components/site-footer";
+import { getMemberPortalSummary } from "@/lib/members/dal";
+import { memberPath } from "@/lib/site";
 
 export const metadata: Metadata = {
   title: "Member Portal — HAM",
@@ -12,6 +14,7 @@ export const metadata: Metadata = {
 export default async function AccountPage() {
   const headerList = await headers();
   const isAuthenticated = headerList.get("x-teamham-authenticated") === "1";
+  const portal = isAuthenticated ? await getMemberPortalSummary() : null;
 
   return (
     <>
@@ -57,6 +60,29 @@ export default async function AccountPage() {
                   another browser or device will replace this session.
                 </p>
               </div>
+
+              {portal?.page || portal?.siteRole === "admin" ? (
+                <nav aria-label="Member tools" className="mt-7 grid gap-3 border-t-2 border-ink pt-6 sm:grid-cols-2">
+                  {portal.page ? (
+                    <Link
+                      href={memberPath(portal.page.slug)}
+                      className="flex min-h-11 items-center justify-between border-2 border-ink bg-paper px-4 py-3 font-bold text-ink shadow-[3px_3px_0_0_var(--color-ink)] transition-transform hover:-translate-y-0.5"
+                    >
+                      {portal.page.isPublished ? "Open your page" : "Edit your draft"}
+                      <span aria-hidden="true">&#8594;</span>
+                    </Link>
+                  ) : null}
+                  {portal.siteRole === "admin" ? (
+                    <Link
+                      href="/admin/members"
+                      className="flex min-h-11 items-center justify-between border-2 border-ink bg-paper px-4 py-3 font-bold text-ink shadow-[3px_3px_0_0_var(--color-ink)] transition-transform hover:-translate-y-0.5"
+                    >
+                      Manage member pages
+                      <span aria-hidden="true">&#8594;</span>
+                    </Link>
+                  ) : null}
+                </nav>
+              ) : null}
 
               <div className="mt-8 flex flex-col gap-4 border-t-2 border-ink pt-6 sm:flex-row sm:items-center sm:justify-between">
                 <form method="post" action="/api/auth/logout">
@@ -111,14 +137,14 @@ export default async function AccountPage() {
                   </li>
                   <li>
                     <strong className="text-ink">Data storage:</strong> We store
-                    only your Discord user ID, your Discord username, and
-                    membership eligibility flags in our database. The username is
-                    kept solely to show you which account you are signed in as. We
-                    do not store your email, avatar, or IP address.
+                    your Discord user ID, Discord username, membership and site
+                    role flags, plus any member-page content you choose to save.
+                    We do not store your email, avatar, or IP address.
                   </li>
                   <li>
                     <strong className="text-ink">Purpose:</strong> Stored data is
-                    used solely for access control to member features.
+                    used for access control and to publish member pages you
+                    explicitly maintain.
                   </li>
                   <li>
                     <strong className="text-ink">Sessions:</strong> We issue a

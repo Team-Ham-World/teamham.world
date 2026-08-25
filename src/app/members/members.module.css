@@ -1,0 +1,66 @@
+.card {
+  --member-rotation: -1.1deg;
+  position: relative;
+  isolation: isolate;
+  opacity: 0;
+  transform: translateY(14px) rotate(var(--member-rotation));
+  animation: member-arrive 360ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+  animation-delay: var(--member-delay, 0ms);
+}
+
+.card[data-variant="1"] { --member-rotation: 0.8deg; }
+.card[data-variant="2"] { --member-rotation: -0.45deg; }
+.card[data-variant="3"] { --member-rotation: 1.25deg; }
+
+.card::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 10px -8px -8px 9px;
+  border: 2px solid var(--color-ink);
+  background: var(--color-surface);
+}
+
+.card[data-variant="1"]::before {
+  background: color-mix(in srgb, var(--color-decorative-red) 13%, var(--color-surface));
+}
+
+.card[data-variant="2"]::before {
+  background: color-mix(in srgb, var(--color-interactive-blue) 12%, var(--color-surface));
+}
+
+.link {
+  transition: transform 180ms ease, background-color 180ms ease;
+}
+
+.link:hover,
+.link:focus-visible {
+  transform: translateY(-4px) rotate(calc(var(--member-rotation) * -1));
+}
+
+@keyframes member-arrive {
+  to {
+    opacity: 1;
+    transform: translateY(0) rotate(var(--member-rotation));
+  }
+}
+
+@media (max-width: 400px) {
+  .card,
+  .card[data-variant] {
+    --member-rotation: 0deg;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    opacity: 1;
+    transform: none;
+    animation: none;
+  }
+
+  .link { transition: none; }
+
+  .link:hover,
+  .link:focus-visible { transform: none; }
+}

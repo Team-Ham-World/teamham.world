@@ -49,83 +49,59 @@ produces those origin errors.
 - `npm run typecheck` - Run TypeScript type checking (`tsc --noEmit`)
 - `npm run build` - Build the production bundle
 - `npm run start` - Start the production server
+- `npm run test:integration:vps` - Run real-Postgres tests through the secured VPS tunnel
+
+The VPS test database is isolated from Neon and is not publicly exposed. See
+[`docs/VPS_TEST_DATABASE.md`](docs/VPS_TEST_DATABASE.md) for usage and operations.
 
 ## Project Structure
 
 - `src/app/` - Root layout, metadata, global styles and design tokens
 - `src/app/m/[member]/` - Member pages, at `/m/<member>`
-- `src/components/` - Project shelf (server) and disclosure control (client)
+- `src/app/members/` - Public member directory
+- `src/app/admin/members/` - Admin member-page management
+- `src/lib/members/` - Member validation, authorization, and database access
+- `src/components/` - Shared server and client UI
 - `src/data/projects.ts` - Typed public project catalog
-- `src/data/members.ts` - Typed public member catalog
+- `migrations/0005_member_pages.sql` - Member roles and page storage
 - `src/app/fonts/` - Drop point for the approved WOFF2 files (see its README)
 
 ## Member pages
 
-Each member gets a page at `teamham.world/m/<member>`: a short introduction, one
-showcase project, and a link out to their own site. The `Who` section on `/`
-lists the catalog and is the only navigational route to these pages.
+Member pages are stored in Postgres and served at `teamham.world/m/<member>`.
+Published pages appear in the animated `/members` directory and in the compact
+homepage preview. The homepage remains static; it loads its minimal public data
+from `/api/members` after hydration.
 
-**`MEMBERS` is currently empty**, so no member page exists: `/m/<anything>`
-returns the branded 404 and the `Who` section does not render. The section is
-rendered by `MemberDirectory` rather than by `page.tsx`, so that the heading
-appears and disappears with its contents — a `Who` rule over an empty rail
-would be the placeholder the content integrity rule forbids.
+An administrator creates, assigns, publishes, and unpublishes pages at
+`/admin/members`. The assigned owner edits the content directly on their
+`/m/<member>` page. Every mutation re-verifies the database-backed session and
+checks the exact role or owner in the server-only data layer; `proxy.ts` is not
+an authorization boundary for these operations.
 
-The end-to-end pipeline — catalog entry, local validation, subdomain
-delegation, DNS, and offboarding — is documented in `organization-docs`, at
-`website/MEMBER_PAGES_AND_SUBDOMAINS.md`.
+Apply `migrations/0005_member_pages.sql` before deploying dependent code, using
+`docs/NEON_MIGRATIONS.md`. The migration does not appoint an administrator.
+Bootstrap the first `accounts.site_role = 'admin'` in a separately reviewed
+owner transaction; the application runtime role cannot change that column.
+
+Page content supports a display name, optional blurb and HTTPS website, and an
+optional HAM-project or external-project showcase. External artwork is not
+editable in v1. Unknown and unpublished pages share the branded 404 for anyone
+other than the assigned owner.
+
+When `AUTH_MODE=disabled`, database-backed member reads return an empty public
+preview and the protected/member discovery routes expose no member content.
+The complete specification and implementation notes live in
+[`docs/website/plans/`](docs/website/plans/).
+
+DNS setup and offboarding for a member's independently hosted site are kept
+separate in `website/reference/MEMBER_PAGES_AND_SUBDOMAINS.md`.
 
 `<member>.teamham.world` is **not** served by this app. That subdomain is
 delegated to the member, who points it at whatever they deploy. This app
 therefore claims no wildcard domain and installs no host rewrite — doing so
 would race the members' own DNS records and silently serve a HAM page whenever
 one was missing or mid-migration.
-
-Adding a member is a content change: append an entry to `MEMBERS` in
-`src/data/members.ts`. Only `slug` and `name` are required — `blurb`, `website`,
-and `showcase` are omitted until the member supplies them, and the page is
-designed to read correctly without them. A `showcase` either references a
-project in `src/data/projects.ts` by slug, so its status and artwork stay
-recorded in one place:
-
-```ts
-showcase: { kind: "project", projectSlug: "untitled-quiz-show" }
-```
-
-or carries its own facts, for something that is not on the HAM shelf:
-
-```ts
-showcase: {
-  kind: "external",
-  name: "…",
-  shortDescription: "…",
-  type: "…",
-  status: "released",
-  url: "https://…",
-}
-```
-
-`website` is recorded rather than derived. It is usually
-`https://<slug>.teamham.world`, but a member may prefer their own domain, and
-some will have no site at all.
-
-`tests/unit/members.test.ts` enforces the catalog's invariants: slugs are valid,
-unique, non-reserved DNS labels; every outbound link — `website`,
-`showcase.url`, and `showcase.repository` — is an absolute `https` URL; and
-every project reference resolves. Slugs are validated as DNS labels even though
-they appear here as a path segment, because the same string becomes the
-member's delegated subdomain.
-
-Outbound links are collected through `resolveShowcase`, so a `kind: "project"`
-showcase is checked on the links it actually renders — which come from
-`projects.ts`, not from the member entry.
-
-Two conventions the tests do not cover, and review has to: `blurb` stays to one
-or two sentences (the page renders it in full, the directory card clamps to
-three lines), and `showcase.url` is left unset when it would equal `website`,
-since the page already renders `website` as its primary call to action.
-
-Members appear on `/` in `MEMBERS` array order — there is no sort.
 
 ### Delegating a subdomain
 
@@ -163,7 +139,7 @@ out of reach of the app entirely: `app_runtime_role` holds `SELECT` alone on
 The mitigation is therefore a naming rule rather than a schema change:
 
 > **The host label of every game OAuth client must be present in
-> `RESERVED_SUBDOMAINS` (`src/data/members.ts`) before the client row is
+> `RESERVED_SUBDOMAINS` (`src/lib/members/model.ts`) before the client row is
 > inserted.**
 
 A reserved label can never be delegated to a member, which closes the path where

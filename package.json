@@ -15,7 +15,8 @@
     "preflight": "tsx scripts/preflight.ts",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration"
+    "test:integration": "vitest run tests/integration",
+    "test:integration:vps": "bash scripts/test-integration-vps.sh"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.1.0",

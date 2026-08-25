@@ -62,6 +62,7 @@ describe("Flappy Puff leaderboard endpoint", () => {
         id: accountId,
         accessStatus: "active",
         membershipStatus: "eligible",
+        siteRole: "member",
         expiresAt: new Date(Date.now() + 60_000),
         username: "hamfriend",
       },
