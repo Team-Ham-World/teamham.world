@@ -52,7 +52,9 @@ produces those origin errors.
 - `npm run test:integration:vps` - Run real-Postgres tests through the secured VPS tunnel
 
 The VPS test database is isolated from Neon and is not publicly exposed. See
-[`docs/VPS_TEST_DATABASE.md`](docs/VPS_TEST_DATABASE.md) for usage and operations.
+[`docs/LOCAL_TESTING.md`](docs/LOCAL_TESTING.md) for the complete local development,
+database, S3-compatible storage, reset, and troubleshooting workflow. VPS-specific
+operations remain in [`docs/VPS_TEST_DATABASE.md`](docs/VPS_TEST_DATABASE.md).
 
 ## Project Structure
 

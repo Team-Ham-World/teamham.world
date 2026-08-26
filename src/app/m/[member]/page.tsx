@@ -2,18 +2,82 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
+import { cache } from "react";
 
 import { MemberEditor } from "@/components/member-editor";
+import { MemberPageV2View } from "@/components/member-page-v2";
 import { ProjectArtwork, StatusStamp } from "@/components/project-visuals";
 import { SiteFooter } from "@/components/site-footer";
 import { MemberSocialLinks } from "@/components/social-links";
+import { getPublishedMemberPageAssetMetadata } from "@/lib/members/assets/dal";
 import { getMemberPageForViewer } from "@/lib/members/dal";
 import {
+  isValidMemberSlug,
   resolveShowcase,
   type MemberPublicPage,
   type ResolvedShowcase,
 } from "@/lib/members/model";
+import { extractMemberPageAssetIds } from "@/lib/members/v2/asset-references";
+import { getPublishedMemberPageV2 } from "@/lib/members/v2/dal";
+import type { MemberPageDocumentV2 } from "@/lib/members/v2/document";
+import {
+  isMemberPageV2Cohort,
+  isMemberPageV2EditorEnabled,
+} from "@/lib/members/v2/feature-flag";
+import {
+  resolveEnabledThemeAccent,
+  type ResolvedMemberThemeAccent,
+} from "@/lib/members/v2/themes";
 import { displayHostname, memberPath } from "@/lib/site";
+
+type PublishedV2Read =
+  | {
+      status: "success";
+      slug: string;
+      document: MemberPageDocumentV2;
+      theme: ResolvedMemberThemeAccent;
+    }
+  | { status: "not-found" }
+  | { status: "invalid" };
+
+/**
+ * Published V2 read, memoized per request.
+ *
+ * `generateMetadata` and the page body both need it, and React's request cache
+ * keeps that to one query per render.
+ */
+const readPublishedV2 = cache(
+  async (slug: string): Promise<PublishedV2Read> => {
+    const result = await getPublishedMemberPageV2(slug);
+    if (result.status === "not-found-or-forbidden") {
+      return { status: "not-found" };
+    }
+    if (result.status === "invalid") return { status: "invalid" };
+
+    const theme = resolveEnabledThemeAccent(
+      result.data.document.frame.theme.id,
+      result.data.document.frame.theme.accentId,
+    );
+    // A published row with an unavailable theme/accent is still a V2 row. It
+    // must fail closed rather than becoming an excuse to expose stale V1 data.
+    if (!theme) return { status: "invalid" };
+
+    return {
+      status: "success",
+      slug: result.data.slug,
+      document: result.data.document,
+      theme,
+    };
+  },
+);
+
+async function failClosedPublishedV2(slug: string): Promise<never> {
+  const { recordInvalidPublishedV2Read } = await import(
+    "@/components/member-page-v2/invalid-published-diagnostic"
+  );
+  recordInvalidPublishedV2Read(slug);
+  notFound();
+}
 
 export async function generateMetadata({
   params,
@@ -21,19 +85,70 @@ export async function generateMetadata({
   params: Promise<{ member: string }>;
 }): Promise<Metadata> {
   const { member: slug } = await params;
-  const result = await getMemberPageForViewer(slug);
-  if (!result) return { title: "Member not found — HAM" };
 
-  const { page } = result;
-  const description = page.blurb ?? `${page.displayName} is a member of HAM.`;
-  const url = memberPath(page.slug);
+  // Reject malformed and reserved route segments before any V2 diagnostic.
+  // They are ordinary invalid requests, not evidence of corrupt published data.
+  if (!isValidMemberSlug(slug)) notFound();
+
+  const inCohort = isMemberPageV2Cohort(slug);
+
+  // Metadata comes from published state only: never a draft, and never a
+  // value visible just because the viewer happens to own the page.
+  const publishedV2 = await readPublishedV2(slug);
+  if (publishedV2.status === "invalid") {
+    return failClosedPublishedV2(slug);
+  }
+  if (publishedV2.status === "success") {
+    return buildMemberMetadata({
+      slug: publishedV2.slug,
+      displayName: publishedV2.document.frame.displayName,
+      description: publishedV2.document.frame.summary,
+    });
+  }
+
+  // Once a slug is assigned to V2, a transient no-row read must never expose
+  // stale V1 metadata. This is intentionally a server-side cohort decision so
+  // both explicit slug cohorts and the `all` cohort fail closed during races.
+  // Metadata cannot decide whether the viewer owns an unpublished page:
+  // throwing `notFound()` here would terminate the whole route before the
+  // viewer-aware page body can render the private owner editor.
+  if (inCohort) return privateMemberMetadata();
+
+  const legacy = await getMemberPageForViewer(slug);
+  if (!legacy?.isPublished) return privateMemberMetadata();
+
+  return buildMemberMetadata({
+    slug: legacy.page.slug,
+    displayName: legacy.page.displayName,
+    description: legacy.page.blurb,
+  });
+}
+
+function privateMemberMetadata(): Metadata {
   return {
-    title: `${page.displayName} — HAM`,
-    description,
+    title: "Member not found — HAM",
+    robots: { index: false, follow: false },
+  };
+}
+
+function buildMemberMetadata({
+  slug,
+  displayName,
+  description,
+}: {
+  slug: string;
+  displayName: string;
+  description: string | null;
+}): Metadata {
+  const summary = description ?? `${displayName} is a member of HAM.`;
+  const url = memberPath(slug);
+  return {
+    title: `${displayName} — HAM`,
+    description: summary,
     alternates: { canonical: url },
     openGraph: {
-      title: `${page.displayName} — HAM`,
-      description,
+      title: `${displayName} — HAM`,
+      description: summary,
       url,
       siteName: "HAM",
       type: "profile",
@@ -56,8 +171,8 @@ function ShowcasePanel({ showcase }: { showcase: ResolvedShowcase }) {
         <p className="mt-4 max-w-prose leading-relaxed text-muted">{showcase.shortDescription}</p>
         {showcase.publicUrl || showcase.repository ? (
           <ul className="mt-5 flex flex-wrap gap-x-6 gap-y-2 text-sm">
-            {showcase.publicUrl ? <li><a href={showcase.publicUrl} rel="noopener noreferrer" className="font-bold text-interactive-blue underline underline-offset-4">Visit</a></li> : null}
-            {showcase.repository ? <li><a href={showcase.repository} rel="noopener noreferrer" className="font-bold text-interactive-blue underline underline-offset-4">Source</a></li> : null}
+            {showcase.publicUrl ? <li><a href={showcase.publicUrl} rel="noopener noreferrer" className="inline-flex min-h-11 min-w-11 items-center font-bold text-interactive-blue underline underline-offset-4">Visit</a></li> : null}
+            {showcase.repository ? <li><a href={showcase.repository} rel="noopener noreferrer" className="inline-flex min-h-11 min-w-11 items-center font-bold text-interactive-blue underline underline-offset-4">Source</a></li> : null}
           </ul>
         ) : null}
       </article>
@@ -165,6 +280,52 @@ function MemberIdentity({
   );
 }
 
+function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-12 pb-20 sm:px-8 sm:pt-16">
+        {children}
+      </main>
+      <SiteFooter />
+    </>
+  );
+}
+
+/**
+ * Owner entry point for their own page.
+ *
+ * The copy has to match reality: telling the owner of a live page that it is
+ * "not public yet" is simply wrong, and could push them into republishing
+ * something that is already published. The link is the only way in; there is
+ * no token and no preview route, so nothing here is reachable by anyone else.
+ */
+function OwnerDraftNotice({
+  slug,
+  isLive,
+}: {
+  slug: string;
+  isLive: boolean;
+}) {
+  return (
+    <div className="border-2 border-ink bg-surface p-5 shadow-[4px_4px_0_0_var(--color-ink)]">
+      <p className="text-xs font-bold tracking-[0.18em] text-muted uppercase">
+        {isLive ? "Your page" : "Private to you"}
+      </p>
+      <p className="mt-3 max-w-prose leading-relaxed text-muted">
+        {isLive
+          ? "This page is live and anyone can see it. Open the editor to change it."
+          : "This page is not public yet. You are the only person who can see it."}
+      </p>
+      <Link
+        href={`${memberPath(slug)}?edit=1#edit-page`}
+        className="mt-5 inline-flex min-h-11 items-center border-2 border-ink bg-ink px-5 py-3 text-sm font-bold tracking-wider text-paper uppercase shadow-[4px_4px_0_0_var(--color-muted)] transition-[transform,background-color,color] hover:-translate-y-0.5 hover:bg-surface hover:text-ink"
+      >
+        Open the editor
+      </Link>
+    </div>
+  );
+}
+
 export default async function MemberPage({
   params,
   searchParams,
@@ -175,26 +336,223 @@ export default async function MemberPage({
   await connection();
   const { member: slug } = await params;
   const query = await searchParams;
-  const result = await getMemberPageForViewer(slug);
-  if (!result) notFound();
 
-  const showcase = resolveShowcase(result.page.showcase);
-  const isEditing = result.isOwner && query.edit === "1";
-  return (
-    <>
-      <main className="mx-auto w-full max-w-5xl flex-1 px-5 pt-12 pb-20 sm:px-8 sm:pt-16">
+  // Invalid route segments are plain 404s. In particular, do not feed them to
+  // the invalid-published-row diagnostic, whose input is reserved for valid
+  // public slugs with unsafe stored V2 state.
+  if (!isValidMemberSlug(slug)) notFound();
+
+  // Cohort membership is a server fact and must be resolved independently of
+  // the first published-row read. That read can legitimately miss while a
+  // publish is racing, but a V2 cohort slug must still never bridge to V1.
+  const inCohort = isMemberPageV2Cohort(slug);
+
+  // Resolve public truth before consulting V1 or owner state. Only a definite
+  // no-row result for a non-cohort slug may proceed to the legacy bridge.
+  const publishedV2 = await readPublishedV2(slug);
+  if (publishedV2.status === "invalid") {
+    return failClosedPublishedV2(slug);
+  }
+
+  const viewer = await getMemberPageForViewer(slug);
+  const isOwner = viewer?.isOwner === true;
+  const wantsEditor = query.edit === "1";
+
+  const editorEnabled = inCohort && isMemberPageV2EditorEnabled(slug);
+  const showV2Editor = isOwner && wantsEditor && editorEnabled;
+
+  if (showV2Editor) {
+    // Imported only on this branch, so no visitor render pulls the editor,
+    // its state machine, or the owner server actions into the graph.
+    const [{ getOwnedMemberPageDraftV2 }, { default: MemberPageEditorMount }] =
+      await Promise.all([
+        import("@/lib/members/v2/dal"),
+        import("@/components/member-page-editor/editor-mount"),
+      ]);
+
+    const draft = await getOwnedMemberPageDraftV2(slug);
+    if (draft.status === "success") {
+      const theme = resolveEnabledThemeAccent(
+        draft.data.draft.frame.theme.id,
+        draft.data.draft.frame.theme.accentId,
+      );
+      if (theme) {
+        const { getOwnedMemberPageAssetsForEditor } = await import(
+          "@/components/member-page-editor/owner-asset-metadata"
+        );
+        const editorAssets = await getOwnedMemberPageAssetsForEditor(
+          draft.data,
+        );
+        // Deliberately outside PageShell: the editor is a workbench, not an
+        // article. It owns the full width below the site header and supplies
+        // its own scrolling regions, so the reading column and the footer
+        // would only shrink the canvas and add a dead end below it.
+        return (
+          <MemberPageEditorMount
+            draft={draft.data}
+            theme={theme}
+            assetMetadata={editorAssets.assetMetadata}
+            initialAssets={editorAssets.assets}
+          />
+        );
+      }
+    }
+  }
+
+  // During the bridge, non-cohort pages remain legacy-authoritative for owner
+  // edits even though migration 0007 backfills a V2 published snapshot for
+  // every live page. Give the explicit owner edit request precedence over the
+  // read-only V2 public renderer so the pilot cannot strand non-pilot owners.
+  if (!inCohort && isOwner && wantsEditor && viewer) {
+    const showcase = resolveShowcase(viewer.page.showcase);
+    return (
+      <PageShell>
         {showcase ? (
           <div className="lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-14">
-            <MemberIdentity member={result.page} canEdit={result.isOwner} isEditing={isEditing} />
+            <MemberIdentity member={viewer.page} canEdit isEditing />
             <ShowcasePanel showcase={showcase} />
           </div>
         ) : (
-          <MemberIdentity member={result.page} canEdit={result.isOwner} isEditing={isEditing} />
+          <MemberIdentity member={viewer.page} canEdit isEditing />
+        )}
+        <MemberEditor member={viewer.page} />
+      </PageShell>
+    );
+  }
+
+  if (publishedV2.status === "success") {
+    const assetMetadataResult = await getPublishedMemberPageAssetMetadata(
+      publishedV2.slug,
+      extractMemberPageAssetIds(publishedV2.document),
+    );
+    if (assetMetadataResult.status === "invalid") {
+      return failClosedPublishedV2(publishedV2.slug);
+    }
+    if (assetMetadataResult.status === "unavailable") notFound();
+    return (
+      <PageShell>
+        <MemberPageV2View
+          document={publishedV2.document}
+          theme={publishedV2.theme}
+          assetMetadata={assetMetadataResult.metadata}
+        />
+        {isOwner ? (
+          <div className="mt-14 border-t-2 border-ink pt-8">
+            <OwnerPageTools
+              slug={publishedV2.slug}
+              editorEnabled={editorEnabled}
+              isLive
+            />
+          </div>
+        ) : null}
+      </PageShell>
+    );
+  }
+
+  // A cohort slug with no published V2 row is either genuinely private or was
+  // observed during a publish transition. Owners retain their V2 entry point,
+  // but nobody receives stale V1 content and no legacy diagnostic is emitted.
+  if (inCohort) {
+    if (isOwner) {
+      return (
+        <PageShell>
+          <OwnerPageTools
+            slug={slug}
+            editorEnabled={editorEnabled}
+            isLive={false}
+          />
+        </PageShell>
+      );
+    }
+    notFound();
+  }
+
+  // Temporary bridge: reached only when the V2 reader definitively found no
+  // published row for a non-cohort slug, and only for a V1 page that is
+  // genuinely published. V1 data never renders inside the V2 frame.
+  if (viewer?.isPublished) {
+    // Coarse signal for how much traffic still needs this path, so the
+    // rollout can tell when it is safe to delete. Public slug only.
+    const { recordLegacyFallbackRender } = await import(
+      "@/components/member-page-editor/legacy-fallback-diagnostic"
+    );
+    recordLegacyFallbackRender(viewer.page.slug);
+
+    const showcase = resolveShowcase(viewer.page.showcase);
+    const isEditingLegacy = isOwner && wantsEditor;
+    return (
+      <PageShell>
+        {showcase ? (
+          <div className="lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-14">
+            <MemberIdentity
+              member={viewer.page}
+              canEdit={isOwner}
+              isEditing={isEditingLegacy}
+            />
+            <ShowcasePanel showcase={showcase} />
+          </div>
+        ) : (
+          <MemberIdentity
+            member={viewer.page}
+            canEdit={isOwner}
+            isEditing={isEditingLegacy}
+          />
         )}
 
-        {isEditing ? <MemberEditor member={result.page} /> : null}
-      </main>
-      <SiteFooter />
-    </>
-  );
+        {isEditingLegacy ? <MemberEditor member={viewer.page} /> : null}
+      </PageShell>
+    );
+  }
+
+  // Owner of a page with nothing public yet: their own private entry point.
+  if (isOwner) {
+    const showcase = resolveShowcase(viewer.page.showcase);
+    const isEditingLegacy = wantsEditor;
+    return (
+      <PageShell>
+        <MemberIdentity
+          member={viewer.page}
+          canEdit
+          isEditing={isEditingLegacy}
+        />
+        {showcase ? <ShowcasePanel showcase={showcase} /> : null}
+        {isEditingLegacy ? <MemberEditor member={viewer.page} /> : null}
+      </PageShell>
+    );
+  }
+
+  notFound();
+}
+
+/**
+ * Owner-only tools panel for a cohort page.
+ *
+ * When the kill switch is on, this states that editing is paused instead of
+ * dropping the owner into the legacy editor, which would write V1 columns for a
+ * page whose truth is its V2 document.
+ */
+function OwnerPageTools({
+  slug,
+  editorEnabled,
+  isLive,
+}: {
+  slug: string;
+  editorEnabled: boolean;
+  isLive: boolean;
+}) {
+  if (!editorEnabled) {
+    return (
+      <div className="border-2 border-ink bg-surface p-5">
+        <p className="text-xs font-bold tracking-[0.18em] text-muted uppercase">
+          Owner tools
+        </p>
+        <p className="mt-3 max-w-prose leading-relaxed text-muted">
+          {isLive
+            ? "Page editing is paused for a short while. Your page is still live and unchanged, and nothing you have saved is affected."
+            : "Page editing is paused for a short while. Your page and its content are unchanged, and nothing you have saved is affected."}
+        </p>
+      </div>
+    );
+  }
+  return <OwnerDraftNotice slug={slug} isLive={isLive} />;
 }

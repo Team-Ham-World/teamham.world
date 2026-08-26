@@ -1,0 +1,150 @@
+.container {
+  /* Stable public renderer hook. Theme behavior lives on .themeSurface. */
+}
+
+.themeSurface {
+  /*
+   * Tailwind v4 utilities such as text-ink and bg-surface resolve these local
+   * variables. Every element that carries the palette declares the aliases, so
+   * a surface renders correctly wherever it is placed and a member theme never
+   * reaches a tool that did not ask for it.
+   */
+  --color-paper: var(--member-paper);
+  --color-ink: var(--member-ink);
+  --color-border: var(--member-border);
+  --color-muted: var(--member-muted);
+  --color-surface: var(--member-surface);
+  --color-decorative-red: var(--member-decorative-red);
+  --color-interactive-blue: var(--member-interactive-blue);
+
+  position: relative;
+  color: var(--color-ink);
+  background-color: transparent;
+}
+
+/*
+ * How far the theme's stock and texture reach.
+ *
+ * `page` is the published page, which owns the browser window: the texture is
+ * fixed to the viewport and painted behind every layer of the document, and
+ * `globals.css` gives the same palette to the body so the header and footer
+ * come with it. `panel` is a themed sheet inside a HAM-coloured tool — the
+ * editor canvas, and the swatches in its theme picker — where the texture
+ * covers that sheet and stops at its edge. A surface with neither carries the
+ * palette and paints nothing, which is what a canvas nested in a themed sheet
+ * needs: two layers of the same texture would only darken it.
+ */
+.themeSurface[data-theme-scope="page"]::before,
+.themeSurface[data-theme-scope="panel"]::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+}
+
+/*
+ * Fixed rather than absolute, with no stacking context above it, so the
+ * texture fills the window and sits behind the header, the article, and the
+ * footer alike instead of stopping at the reading column.
+ */
+.themeSurface[data-theme-scope="page"]::before {
+  position: fixed;
+}
+
+.themeSurface[data-theme-scope="panel"] {
+  isolation: isolate;
+  background-color: var(--color-paper);
+}
+
+/* Paper deliberately adds nothing beyond the exact existing HAM palette. */
+.themeSurface[data-theme-id="paper"]::before {
+  display: none;
+}
+
+/* Fine press rules: quiet enough to sit behind copy without becoming texture. */
+.themeSurface[data-theme-id="newsprint"]::before {
+  opacity: 0.6;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0,
+    transparent 31px,
+    color-mix(in srgb, var(--color-border) 7%, transparent) 31px,
+    color-mix(in srgb, var(--color-border) 7%, transparent) 32px
+  );
+}
+
+/* A light drafting grid; the paper and surfaces stay bright in every accent. */
+.themeSurface[data-theme-id="blueprint"]::before {
+  opacity: 0.72;
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-border) 7%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-border) 7%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      color-mix(in srgb, var(--color-interactive-blue) 8%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-interactive-blue) 8%, transparent) 1px,
+      transparent 1px
+    );
+  background-size:
+    24px 24px,
+    24px 24px,
+    96px 96px,
+    96px 96px;
+}
+
+/* Sparse offset dots suggest two-pass ink without placing marks over content. */
+.themeSurface[data-theme-id="riso"]::before {
+  opacity: 0.62;
+  background-image:
+    radial-gradient(
+      circle,
+      color-mix(in srgb, var(--color-decorative-red) 10%, transparent) 0 0.75px,
+      transparent 0.9px
+    ),
+    radial-gradient(
+      circle,
+      color-mix(in srgb, var(--color-interactive-blue) 8%, transparent) 0 0.65px,
+      transparent 0.8px
+    );
+  background-position:
+    0 0,
+    4px 3px;
+  background-size:
+    14px 14px,
+    14px 14px;
+}
+
+@media (max-width: 399px) {
+  .themeSurface[data-theme-id="blueprint"]::before {
+    background-size:
+      20px 20px,
+      20px 20px,
+      80px 80px,
+      80px 80px;
+  }
+
+  .themeSurface[data-theme-id="riso"]::before {
+    background-size:
+      16px 16px,
+      16px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .themeSurface::before {
+    /* Explicitly static even if future global motion rules expand. */
+    animation: none;
+    transition: none;
+  }
+}

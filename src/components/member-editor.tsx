@@ -8,6 +8,7 @@ import {
   type MemberEditorState,
 } from "@/app/m/[member]/actions";
 import { FormSubmitButton } from "@/components/form-submit-button";
+import { ProjectArtwork } from "@/components/project-visuals";
 import { SocialIcon } from "@/components/social-links";
 import { PROJECTS, STATUS_LABELS, type ProjectStatus } from "@/data/projects";
 import type { MemberPublicPage } from "@/lib/members/model";
@@ -296,21 +297,36 @@ export function MemberEditor({ member }: { member: MemberPublicPage }) {
                   className={INPUT_CLASS}
                 />
               </div>
-              <div className="sm:col-span-2">
-                <label htmlFor="showcaseImageUrl" className="font-bold">Artwork URL <span className="font-normal text-muted">(optional)</span></label>
-                <input
-                  id="showcaseImageUrl"
-                  name="showcaseImageUrl"
-                  type="url"
-                  inputMode="url"
-                  maxLength={MEMBER_LIMITS.websiteUrl}
-                  placeholder="https://example.com/project-cover.jpg"
-                  defaultValue={external?.imageUrl ?? ""}
-                  aria-describedby="showcaseImageUrl-help"
-                  className={INPUT_CLASS}
-                />
-                <p id="showcaseImageUrl-help" className="mt-2 text-sm text-muted">
-                  Leave blank and we&apos;ll try the project URL&apos;s Open Graph image when you save.
+              <div
+                className="sm:col-span-2 border-2 border-dashed border-muted bg-paper p-4"
+                aria-labelledby="legacy-showcase-artwork-heading"
+              >
+                <p id="legacy-showcase-artwork-heading" className="font-bold">
+                  Project artwork
+                </p>
+                {external?.imageUrl ? (
+                  <div className="mt-3 max-w-xl">
+                    <ProjectArtwork
+                      artwork={{
+                        src: external.imageUrl,
+                        alt: `${external.name} showcase artwork`,
+                        remote: true,
+                      }}
+                      sizes="(min-width: 640px) 576px, calc(100vw - 4rem)"
+                    />
+                    <p className="mt-3 text-sm leading-relaxed text-muted">
+                      This existing remote image is shown read-only. Saving this
+                      legacy form will not create, replace, or import artwork.
+                    </p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm leading-relaxed text-muted">
+                    Artwork cannot be added from this legacy editor.
+                  </p>
+                )}
+                <p className="mt-2 text-sm leading-relaxed text-muted">
+                  Uploaded project artwork is managed in the new page editor
+                  after this page joins the V2 rollout.
                 </p>
               </div>
               <div className="sm:col-span-2">

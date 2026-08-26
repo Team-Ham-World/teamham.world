@@ -11,12 +11,15 @@ import {
   type MemberDirectoryItem,
   type MemberPublicPage,
 } from "@/lib/members/model";
-import { findOpenGraphImage } from "@/lib/members/open-graph";
 import {
   validateMemberContent,
   validateMemberSlug,
+  type MemberContentInput,
   type MemberFieldErrors,
 } from "@/lib/members/validation";
+import { isMemberPageV2Cohort } from "@/lib/members/v2/feature-flag";
+import { legacyToDoc } from "@/lib/members/v2/legacy-to-doc";
+import { parseMemberPageDocumentV2 } from "@/lib/members/v2/validation";
 
 interface MemberPageRow {
   slug: unknown;
@@ -27,6 +30,7 @@ interface MemberPageRow {
   showcase: unknown;
   owner_account_id?: unknown;
   is_published?: unknown;
+  moderation_hold?: unknown;
 }
 
 interface DirectoryRow {
@@ -45,6 +49,7 @@ export interface AdminAccountOption {
   id: string;
   username: string | null;
   hasPage: boolean;
+  assignedPageSlug: string | null;
 }
 
 export interface AdminMemberPageRow {
@@ -52,6 +57,11 @@ export interface AdminMemberPageRow {
   slug: string;
   displayName: string;
   isPublished: boolean;
+  moderationHold: boolean;
+  publishedAt: string | null;
+  unpublishedAt: string | null;
+  moderationHeldAt: string | null;
+  isV2Cohort: boolean;
   ownerAccountId: string;
   ownerUsername: string | null;
 }
@@ -106,6 +116,127 @@ function parseNullableString(value: unknown, maximum: number): string | null {
     throw new Error("Malformed member-page database result");
   }
   return value;
+}
+
+function parseNullableTimestamp(value: unknown): string | null {
+  if (value === null) return null;
+  if (!(value instanceof Date) && typeof value !== "string") {
+    throw new Error("Malformed member-page database result");
+  }
+  const timestamp = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    throw new Error("Malformed member-page database result");
+  }
+  return timestamp.toISOString();
+}
+
+function legacyDocumentForPage(
+  pageId: string,
+  content: MemberContentInput,
+  externalArtworkAssetId?: string,
+) {
+  return legacyToDoc(content, {
+    ids: () => `legacy-featured-${pageId}`,
+    ...(externalArtworkAssetId ? { externalArtworkAssetId } : {}),
+  });
+}
+
+function normalizeExternalProjectUrl(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    return new URL(value.normalize("NFC").trim()).href;
+  } catch {
+    return null;
+  }
+}
+
+function hasSameExternalProjectIdentity(
+  existing: {
+    name: string;
+    shortDescription: string;
+    type: string;
+    status: string;
+    url?: string;
+    repository?: string;
+  },
+  next: {
+    name: string;
+    shortDescription: string;
+    type: string;
+    status: string;
+    url?: string;
+    repository?: string;
+  },
+): boolean {
+  const existingUrl = normalizeExternalProjectUrl(existing.url);
+  const nextUrl = normalizeExternalProjectUrl(next.url);
+  if (existingUrl && nextUrl && existingUrl === nextUrl) return true;
+
+  const existingRepository = normalizeExternalProjectUrl(existing.repository);
+  const nextRepository = normalizeExternalProjectUrl(next.repository);
+  if (
+    existingRepository &&
+    nextRepository &&
+    existingRepository === nextRepository
+  ) {
+    return true;
+  }
+
+  // URL and repository are both optional. When neither version has a stable
+  // link, preserve imported artwork only for an otherwise exact canonical
+  // project identity; changing any descriptive field intentionally drops it.
+  if (existingUrl || nextUrl || existingRepository || nextRepository) {
+    return false;
+  }
+  return (
+    existing.name.normalize("NFC").trim() === next.name.normalize("NFC").trim() &&
+    existing.shortDescription.normalize("NFC").trim() ===
+      next.shortDescription.normalize("NFC").trim() &&
+    existing.type.normalize("NFC").trim() === next.type.normalize("NFC").trim() &&
+    existing.status === next.status
+  );
+}
+
+function preservedExternalArtworkAssetId(
+  draftDocument: unknown,
+  showcase: MemberContentInput["showcase"],
+): string | undefined {
+  if (showcase?.kind !== "external") return undefined;
+
+  const parsedDraft = parseMemberPageDocumentV2(draftDocument);
+  if (!parsedDraft.success) return undefined;
+
+  for (const block of parsedDraft.doc.blocks) {
+    if (block.type !== "featuredProject") continue;
+    if (
+      block.project.kind !== "external" ||
+      !block.project.artwork ||
+      !hasSameExternalProjectIdentity(block.project, showcase)
+    ) {
+      return undefined;
+    }
+    return block.project.artwork.assetId;
+  }
+
+  return undefined;
+}
+
+function withoutRemoteShowcaseArtwork(
+  showcase: MemberContentInput["showcase"],
+): MemberContentInput["showcase"] {
+  if (showcase?.kind !== "external") return showcase;
+  const sanitizedShowcase = { ...showcase };
+  delete sanitizedShowcase.imageUrl;
+  return sanitizedShowcase;
+}
+
+function rejectV2CohortLegacyMutation(slug: string): void {
+  if (isMemberPageV2Cohort(slug)) {
+    throw new MemberMutationError(
+      "invalid",
+      "This page uses the new editor and cannot be changed through the legacy controls.",
+    );
+  }
 }
 
 function parsePublicPage(row: MemberPageRow): MemberPublicPage {
@@ -163,6 +294,7 @@ export async function listPublishedMembers(
     SELECT slug, display_name, blurb
     FROM public.member_pages
     WHERE is_published = TRUE
+      AND moderation_hold = FALSE
     ORDER BY LOWER(display_name), slug
     LIMIT ${safeLimit};
   `) as DirectoryRow[];
@@ -186,10 +318,14 @@ const readMemberPageForViewer = async (
       social_links,
       showcase,
       owner_account_id,
-      is_published
+      is_published,
+      moderation_hold
     FROM public.member_pages
     WHERE slug = ${slug}
-      AND (is_published = TRUE OR owner_account_id = ${viewerId})
+      AND (
+        (is_published = TRUE AND moderation_hold = FALSE)
+        OR owner_account_id = ${viewerId}
+      )
     LIMIT 1;
   `) as MemberPageRow[];
 
@@ -199,7 +335,8 @@ const readMemberPageForViewer = async (
   if (
     typeof row.owner_account_id !== "string" ||
     !isValidUuid(row.owner_account_id) ||
-    typeof row.is_published !== "boolean"
+    typeof row.is_published !== "boolean" ||
+    typeof row.moderation_hold !== "boolean"
   ) {
     throw new Error("Malformed member-page database result");
   }
@@ -207,7 +344,7 @@ const readMemberPageForViewer = async (
   return {
     page: parsePublicPage(row),
     isOwner: viewerId === row.owner_account_id,
-    isPublished: row.is_published,
+    isPublished: row.is_published && !row.moderation_hold,
   };
 };
 
@@ -258,7 +395,8 @@ export async function getAdminMemberManagementData(): Promise<AdminMemberManagem
       SELECT
         a.id,
         a.discord_username,
-        (mp.id IS NOT NULL) AS has_page
+        (mp.id IS NOT NULL) AS has_page,
+        mp.slug AS assigned_page_slug
       FROM public.accounts a
       LEFT JOIN public.member_pages mp ON mp.owner_account_id = a.id
       WHERE a.access_status = 'active'
@@ -272,6 +410,10 @@ export async function getAdminMemberManagementData(): Promise<AdminMemberManagem
         mp.slug,
         mp.display_name,
         mp.is_published,
+        mp.moderation_hold,
+        mp.published_at,
+        mp.unpublished_at,
+        mp.moderation_held_at,
         mp.owner_account_id,
         a.discord_username AS owner_username
       FROM public.member_pages mp
@@ -285,7 +427,11 @@ export async function getAdminMemberManagementData(): Promise<AdminMemberManagem
       typeof row.id !== "string" ||
       !isValidUuid(row.id) ||
       (row.discord_username !== null && typeof row.discord_username !== "string") ||
-      typeof row.has_page !== "boolean"
+      typeof row.has_page !== "boolean" ||
+      (row.assigned_page_slug !== null &&
+        (typeof row.assigned_page_slug !== "string" ||
+          !isValidMemberSlug(row.assigned_page_slug))) ||
+      row.has_page !== (row.assigned_page_slug !== null)
     ) {
       throw new Error("Malformed admin account query result");
     }
@@ -293,6 +439,7 @@ export async function getAdminMemberManagementData(): Promise<AdminMemberManagem
       id: row.id,
       username: row.discord_username as string | null,
       hasPage: row.has_page,
+      assignedPageSlug: row.assigned_page_slug as string | null,
     };
   });
 
@@ -306,6 +453,7 @@ export async function getAdminMemberManagementData(): Promise<AdminMemberManagem
       !isValidMemberSlug(row.slug) ||
       typeof row.display_name !== "string" ||
       typeof row.is_published !== "boolean" ||
+      typeof row.moderation_hold !== "boolean" ||
       (row.owner_username !== null && typeof row.owner_username !== "string")
     ) {
       throw new Error("Malformed admin member-page query result");
@@ -315,6 +463,11 @@ export async function getAdminMemberManagementData(): Promise<AdminMemberManagem
       slug: row.slug,
       displayName: row.display_name,
       isPublished: row.is_published,
+      moderationHold: row.moderation_hold,
+      publishedAt: parseNullableTimestamp(row.published_at),
+      unpublishedAt: parseNullableTimestamp(row.unpublished_at),
+      moderationHeldAt: parseNullableTimestamp(row.moderation_held_at),
+      isV2Cohort: isMemberPageV2Cohort(row.slug),
       ownerAccountId: row.owner_account_id,
       ownerUsername: row.owner_username as string | null,
     };
@@ -373,6 +526,16 @@ export async function createMemberPage(input: {
   if (!ownerAccountId || !slug || !content.success) {
     throw new Error("Member-page validation failed without field errors");
   }
+  if (input.isPublished && isMemberPageV2Cohort(slug)) {
+    throw new MemberMutationError(
+      "invalid",
+      "Pages assigned to the new editor must begin unpublished.",
+    );
+  }
+
+  const draftDocument = legacyToDoc(content.data, {
+    ids: () => `legacy-featured-${slug}`,
+  });
 
   const sql = getDbClient();
   try {
@@ -382,14 +545,20 @@ export async function createMemberPage(input: {
         created_by_account_id,
         slug,
         display_name,
-        is_published
+        is_published,
+        draft_doc,
+        published_doc,
+        published_at
       )
       SELECT
         owner.id,
         ${admin.id},
         ${slug},
         ${content.data.displayName},
-        ${input.isPublished}
+        ${input.isPublished},
+        ${draftDocument},
+        ${input.isPublished ? draftDocument : null},
+        CASE WHEN ${input.isPublished} THEN NOW() ELSE NULL END
       FROM public.accounts owner
       WHERE owner.id = ${ownerAccountId}
         AND owner.access_status = 'active'
@@ -423,40 +592,52 @@ export async function updateOwnedMemberPage(
     throw new MemberAccessError("unauthenticated", "Sign in is required.");
   }
   const slug = validateMemberSlug(slugInput);
-  const content = validateMemberContent(input);
   if (!slug) {
     throw new MemberMutationError("invalid", "This member address is invalid.", {
       slug: "Invalid member address.",
     });
   }
+  rejectV2CohortLegacyMutation(slug);
+
+  const content = validateMemberContent(input);
   if (!content.success) {
     throw new MemberMutationError("invalid", "Check the highlighted fields.", content.errors);
   }
 
   const sql = getDbClient();
-  let showcase = content.data.showcase;
-  if (
-    showcase?.kind === "external" &&
-    !showcase.imageUrl &&
-    showcase.url
-  ) {
-    const ownerRows = (await sql`
-      SELECT slug
-      FROM public.member_pages
-      WHERE slug = ${slug}
-        AND owner_account_id = ${account.id}
-      LIMIT 1;
-    `) as Array<{ slug: unknown }>;
-    if (ownerRows.length === 0) {
-      throw new MemberAccessError("forbidden", "You cannot edit this member page.");
-    }
-    if (ownerRows.length !== 1 || ownerRows[0].slug !== slug) {
-      throw new Error("Malformed member-page ownership result");
-    }
-
-    const imageUrl = await findOpenGraphImage(showcase.url);
-    if (imageUrl) showcase = { ...showcase, imageUrl };
+  const ownerRows = (await sql`
+    SELECT id, slug, draft_doc
+    FROM public.member_pages
+    WHERE slug = ${slug}
+      AND owner_account_id = ${account.id}
+    LIMIT 1;
+  `) as Array<{ id: unknown; slug: unknown; draft_doc: unknown }>;
+  if (ownerRows.length === 0) {
+    throw new MemberAccessError("forbidden", "You cannot edit this member page.");
   }
+  if (
+    ownerRows.length !== 1 ||
+    typeof ownerRows[0].id !== "string" ||
+    !isValidUuid(ownerRows[0].id) ||
+    ownerRows[0].slug !== slug
+  ) {
+    throw new Error("Malformed member-page ownership result");
+  }
+
+  const showcase = withoutRemoteShowcaseArtwork(content.data.showcase);
+  const externalArtworkAssetId = preservedExternalArtworkAssetId(
+    ownerRows[0].draft_doc,
+    showcase,
+  );
+
+  const draftDocument = legacyDocumentForPage(
+    ownerRows[0].id,
+    {
+      ...content.data,
+      showcase,
+    },
+    externalArtworkAssetId,
+  );
 
   const rows = (await sql`
     UPDATE public.member_pages
@@ -466,6 +647,13 @@ export async function updateOwnedMemberPage(
       website_url = ${content.data.websiteUrl},
       social_links = ${content.data.socialLinks},
       showcase = ${showcase},
+      draft_doc = ${draftDocument},
+      draft_rev = draft_rev + 1,
+      draft_updated_at = NOW(),
+      published_doc = CASE
+        WHEN is_published THEN ${draftDocument}
+        ELSE published_doc
+      END,
       updated_at = NOW()
     WHERE slug = ${slug}
       AND owner_account_id = ${account.id}
@@ -490,13 +678,261 @@ export async function setMemberPublication(
     throw new MemberMutationError("invalid", "Invalid member page.");
   }
   const sql = getDbClient();
+  const pageRows = (await sql`
+    SELECT slug, moderation_hold
+    FROM public.member_pages
+    WHERE id = ${pageId}
+    LIMIT 1;
+  `) as Array<{ slug: unknown; moderation_hold: unknown }>;
+  if (pageRows.length === 0) {
+    throw new MemberMutationError("not_found", "Member page not found.");
+  }
+  if (
+    pageRows.length !== 1 ||
+    typeof pageRows[0].slug !== "string" ||
+    !isValidMemberSlug(pageRows[0].slug) ||
+    typeof pageRows[0].moderation_hold !== "boolean"
+  ) {
+    throw new Error("Malformed publication lookup result");
+  }
+  rejectV2CohortLegacyMutation(pageRows[0].slug);
+  if (isPublished && pageRows[0].moderation_hold) {
+    throw new MemberMutationError(
+      "invalid",
+      "A page on moderation hold cannot be published.",
+    );
+  }
+
   const rows = (await sql`
     UPDATE public.member_pages
-    SET is_published = ${isPublished}, updated_at = NOW()
+    SET
+      published_doc = CASE
+        WHEN ${isPublished} THEN draft_doc
+        ELSE published_doc
+      END,
+      display_name = CASE
+        WHEN ${isPublished} THEN draft_doc #>> '{frame,displayName}'
+        ELSE display_name
+      END,
+      blurb = CASE
+        WHEN ${isPublished} THEN draft_doc #>> '{frame,summary}'
+        ELSE blurb
+      END,
+      is_published = ${isPublished},
+      published_at = CASE
+        WHEN ${isPublished} THEN NOW()
+        ELSE published_at
+      END,
+      unpublished_at = CASE
+        WHEN ${isPublished} THEN NULL
+        ELSE NOW()
+      END,
+      updated_at = NOW()
     WHERE id = ${pageId}
+      AND (NOT ${isPublished} OR moderation_hold = FALSE)
+      AND (
+        NOT ${isPublished}
+        OR draft_doc = jsonb_build_object(
+          'schemaVersion', 2,
+          'frame', jsonb_build_object(
+            'displayName', BTRIM(
+              NORMALIZE(display_name, NFC),
+              U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+            ),
+            'summary', NULLIF(BTRIM(
+              NORMALIZE(blurb, NFC),
+              U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+            ), ''),
+            'websiteUrl', NULLIF(BTRIM(
+              NORMALIZE(website_url, NFC),
+              U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+            ), ''),
+            'socialLinks', jsonb_strip_nulls(jsonb_build_object(
+              'github', NULLIF(BTRIM(
+                NORMALIZE(social_links->>'github', NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'bluesky', NULLIF(BTRIM(
+                NORMALIZE(social_links->>'bluesky', NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'mastodon', NULLIF(BTRIM(
+                NORMALIZE(social_links->>'mastodon', NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'instagram', NULLIF(BTRIM(
+                NORMALIZE(social_links->>'instagram', NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'youtube', NULLIF(BTRIM(
+                NORMALIZE(social_links->>'youtube', NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'twitch', NULLIF(BTRIM(
+                NORMALIZE(social_links->>'twitch', NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'x', NULLIF(BTRIM(
+                NORMALIZE(social_links->>'x', NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), '')
+            )),
+            'portrait', NULL,
+            'theme', jsonb_build_object(
+              'id', 'paper',
+              'accentId', 'default'
+            )
+          ),
+          'blocks', CASE
+            WHEN showcase IS NULL THEN '[]'::jsonb
+            WHEN showcase->>'kind' = 'project' THEN
+              jsonb_build_array(
+                jsonb_build_object(
+                  'id', 'legacy-featured-' || id::text,
+                  'type', 'featuredProject',
+                  'variant', 'card',
+                  'project', jsonb_build_object(
+                    'kind', 'ham',
+                    'projectSlug', showcase->>'projectSlug'
+                  )
+                )
+              )
+            WHEN showcase->>'kind' = 'external' THEN
+              jsonb_build_array(
+                jsonb_build_object(
+                  'id', 'legacy-featured-' || id::text,
+                  'type', 'featuredProject',
+                  'variant', 'card',
+                  'project', jsonb_strip_nulls(
+                    jsonb_build_object(
+                      'kind', 'external',
+                      'name', BTRIM(
+                        NORMALIZE(showcase->>'name', NFC),
+                        U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                      ),
+                      'shortDescription', BTRIM(
+                        NORMALIZE(showcase->>'shortDescription', NFC),
+                        U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                      ),
+                      'type', BTRIM(
+                        NORMALIZE(showcase->>'type', NFC),
+                        U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                      ),
+                      'status', showcase->>'status',
+                      'url', NULLIF(BTRIM(
+                        NORMALIZE(showcase->>'url', NFC),
+                        U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                      ), ''),
+                      'repository', NULLIF(BTRIM(
+                        NORMALIZE(showcase->>'repository', NFC),
+                        U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                      ), ''),
+                      'artwork', CASE
+                        WHEN
+                          JSONB_TYPEOF(
+                            draft_doc #> '{blocks,0,project,artwork}'
+                          ) = 'object'
+                          AND (
+                            draft_doc #> '{blocks,0,project,artwork}'
+                          ) ?& ARRAY['assetId', 'alt', 'decorative']
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM JSONB_OBJECT_KEYS(
+                              draft_doc #> '{blocks,0,project,artwork}'
+                            ) AS artwork_key(key)
+                            WHERE artwork_key.key NOT IN (
+                              'assetId',
+                              'alt',
+                              'decorative'
+                            )
+                          )
+                          AND JSONB_TYPEOF(
+                            draft_doc #> '{blocks,0,project,artwork,assetId}'
+                          ) = 'string'
+                          AND JSONB_TYPEOF(
+                            draft_doc #> '{blocks,0,project,artwork,decorative}'
+                          ) = 'boolean'
+                          AND (
+                            (
+                              draft_doc #>> '{blocks,0,project,artwork,decorative}'
+                            ) = 'true'
+                            AND (
+                              draft_doc #> '{blocks,0,project,artwork,alt}'
+                            ) = 'null'::jsonb
+                            OR (
+                              draft_doc #>> '{blocks,0,project,artwork,decorative}'
+                            ) = 'false'
+                            AND JSONB_TYPEOF(
+                              draft_doc #> '{blocks,0,project,artwork,alt}'
+                            ) = 'string'
+                            AND BTRIM(
+                              NORMALIZE(
+                                draft_doc #>> '{blocks,0,project,artwork,alt}',
+                                NFC
+                              ),
+                              U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                            ) = (
+                              draft_doc #>> '{blocks,0,project,artwork,alt}'
+                            )
+                            AND BTRIM(
+                              NORMALIZE(
+                                draft_doc #>> '{blocks,0,project,artwork,alt}',
+                                NFC
+                              ),
+                              U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                            ) <> ''
+                            AND LENGTH(
+                              draft_doc #>> '{blocks,0,project,artwork,alt}'
+                            ) <= 500
+                            AND NOT EXISTS (
+                              SELECT 1
+                              FROM GENERATE_SERIES(
+                                1,
+                                LENGTH(
+                                  draft_doc #>> '{blocks,0,project,artwork,alt}'
+                                )
+                              ) AS codepoint_index(position)
+                              WHERE ASCII(SUBSTRING(
+                                draft_doc #>> '{blocks,0,project,artwork,alt}'
+                                FROM codepoint_index.position FOR 1
+                              )) BETWEEN 1 AND 31
+                                 OR ASCII(SUBSTRING(
+                                   draft_doc #>> '{blocks,0,project,artwork,alt}'
+                                   FROM codepoint_index.position FOR 1
+                                 )) BETWEEN 127 AND 159
+                            )
+                          )
+                          AND EXISTS (
+                            SELECT 1
+                            FROM public.member_page_assets asset
+                            WHERE asset.member_page_id = member_pages.id
+                              AND asset.id::text = (
+                                draft_doc #>> '{blocks,0,project,artwork,assetId}'
+                              )
+                              AND asset.status = 'ready'
+                              AND asset.deletion_claimed_at IS NULL
+                          )
+                          THEN draft_doc #> '{blocks,0,project,artwork}'
+                        ELSE NULL
+                      END
+                    )
+                  )
+                )
+              )
+            ELSE '[]'::jsonb
+          END
+        )
+      )
     RETURNING slug;
   `) as Array<{ slug: unknown }>;
-  if (rows.length === 0) throw new MemberMutationError("not_found", "Member page not found.");
+  if (rows.length === 0) {
+    throw new MemberMutationError(
+      "invalid",
+      isPublished
+        ? "This legacy page cannot be published from its current draft."
+        : "Member page not found.",
+    );
+  }
   if (rows.length !== 1 || typeof rows[0].slug !== "string") {
     throw new Error("Malformed publication update result");
   }

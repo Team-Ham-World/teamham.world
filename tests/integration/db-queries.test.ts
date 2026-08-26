@@ -45,6 +45,14 @@ import {
   generateGameAccessToken,
 } from '@/lib/auth/game-oauth';
 import { getPuffLeaderboard, savePuffHighScore } from '@/lib/puff/leaderboard';
+import type { MemberContentInput } from '@/lib/members/validation';
+import type { MemberPageDocumentV2 } from '@/lib/members/v2/document';
+import { legacyToDoc } from '@/lib/members/v2/legacy-to-doc';
+import { parseMemberPageDocumentV2 } from '@/lib/members/v2/validation';
+import {
+  ALL_PROJECT_STATUSES,
+  minimalMemberPageDocument,
+} from '../fixtures/member-v2/documents';
 import { VALID_DEV_ENV } from '../helpers/test-fixtures';
 
 const rawTestDbUrl = process.env.TEST_DATABASE_URL;
@@ -52,6 +60,196 @@ const hasTestDb = Boolean(rawTestDbUrl && rawTestDbUrl.trim() !== '');
 
 const TEST_RUNTIME_ROLE = 'app_runtime_role';
 const TEST_RUNTIME_PASSWORD = 'test_only_runtime_secret_password_12345';
+
+interface MemberV2BackfillFixture {
+  pageId: string;
+  content: MemberContentInput;
+  storedDisplayName?: string;
+  storedBlurb?: string | null;
+  storedWebsiteUrl?: string | null;
+  storedSocialLinks?: unknown;
+  storedShowcase: unknown;
+  isPublished: boolean;
+  updatedAt: string;
+}
+
+interface MemberV2BackfillRow {
+  id: string;
+  showcase: unknown | null;
+  draft_doc: unknown;
+  published_doc: unknown | null;
+  draft_rev: string;
+  draft_updated_at: Date;
+  updated_at: Date;
+  published_at: Date | null;
+  unpublished_at: Date | null;
+  moderation_hold: boolean;
+  moderation_held_at: Date | null;
+  asset_pending_count: number;
+  asset_ready_count: number;
+  asset_alloc_window_started_at: Date | null;
+  asset_alloc_window_count: number;
+}
+
+interface MemberV2BackfillSnapshot {
+  fixture: MemberV2BackfillFixture;
+  row: MemberV2BackfillRow;
+}
+
+interface MigrationPreconditionProbeResult {
+  label: string;
+  code: string | null;
+  message: string;
+}
+
+interface MigrationValidEdgeProbeResult {
+  code: string | null;
+  message: string;
+  draftDoc: unknown | null;
+}
+
+function makeMinimalMemberV2Document(displayName = 'HAM Friend'): MemberPageDocumentV2 {
+  const fixture = minimalMemberPageDocument();
+  return {
+    ...fixture,
+    frame: {
+      ...fixture.frame,
+      displayName,
+    },
+  };
+}
+
+function makeUrlWithLength(length: number, prefix = 'https://example.com/'): string {
+  if (prefix.length > length) throw new Error('URL prefix exceeds requested length.');
+  return prefix + 'a'.repeat(length - prefix.length);
+}
+
+function makeMemberV2BackfillFixtures(): MemberV2BackfillFixture[] {
+  const maximumLengthUrl = makeUrlWithLength(2048);
+  const fixtures: MemberV2BackfillFixture[] = [
+    {
+      pageId: '70000000-0000-4000-8000-000000000001',
+      content: {
+        displayName: 'No Showcase',
+        blurb: null,
+        websiteUrl: null,
+        socialLinks: {},
+        showcase: null,
+      },
+      storedDisplayName: '  No Showcase  ',
+      storedBlurb: '   ',
+      storedSocialLinks: {
+        github: null,
+        bluesky: '',
+        mastodon: '   ',
+      },
+      storedShowcase: null,
+      isPublished: false,
+      updatedAt: '2026-01-01T01:02:03.000Z',
+    },
+    {
+      pageId: '70000000-0000-4000-8000-000000000002',
+      content: {
+        displayName: 'HAM Showcase',
+        blurb: 'Builds playful things.',
+        websiteUrl: 'https://ham-showcase.example',
+        socialLinks: {
+          github: 'https://github.com/ham-showcase',
+          bluesky: 'https://bsky.app/profile/ham-showcase.example',
+          mastodon: 'https://social.example/@ham-showcase',
+          instagram: 'https://instagram.com/ham-showcase',
+          youtube: 'https://youtube.com/@ham-showcase',
+          twitch: 'https://twitch.tv/ham-showcase',
+          x: 'https://x.com/ham-showcase',
+        },
+        showcase: { kind: 'project', projectSlug: 'untitled-quiz-show' },
+      },
+      storedShowcase: { kind: 'project', projectSlug: 'untitled-quiz-show' },
+      isPublished: true,
+      updatedAt: '2026-02-02T02:03:04.000Z',
+    },
+    {
+      pageId: '70000000-0000-4000-8000-000000000009',
+      content: {
+        displayName: 'D'.repeat(80),
+        blurb: 'B'.repeat(500),
+        websiteUrl: maximumLengthUrl,
+        socialLinks: {
+          github: 'https://github.com/legacy-edge',
+          x: maximumLengthUrl,
+        },
+        showcase: {
+          kind: 'external',
+          name: 'N'.repeat(80),
+          shortDescription: 'S'.repeat(500),
+          type: 'T'.repeat(80),
+          status: 'released',
+        },
+      },
+      storedSocialLinks: {
+        github: '  https://github.com/legacy-edge  ',
+        bluesky: null,
+        mastodon: '',
+        instagram: '   ',
+        x: maximumLengthUrl,
+      },
+      storedShowcase: {
+        kind: 'external',
+        name: 'N'.repeat(80),
+        shortDescription: 'S'.repeat(500),
+        type: 'T'.repeat(80),
+        status: 'released',
+        url: '',
+        repository: null,
+        imageUrl: 'https://remote.example/operator-import-edge.png',
+      },
+      isPublished: true,
+      updatedAt: '2026-02-03T02:03:04.000Z',
+    },
+  ];
+
+  for (const [index, status] of ALL_PROJECT_STATUSES.entries()) {
+    const includeLinks = index === 0;
+    const content: MemberContentInput = {
+      displayName: `External ${status}`,
+      blurb: index % 2 === 0 ? `Status ${status}.` : null,
+      websiteUrl: index % 2 === 0 ? `https://${status}.example` : null,
+      socialLinks: index === 1 ? { github: 'https://github.com/external-project' } : {},
+      showcase: {
+        kind: 'external',
+        name: `Project ${status}`,
+        shortDescription: `Description for ${status}.`,
+        type: 'game',
+        status,
+        ...(includeLinks
+          ? {
+              url: 'https://example.com/play',
+              repository: 'https://github.com/teamham/external-project',
+            }
+          : {}),
+      },
+    };
+    const showcase = content.showcase;
+    if (!showcase || showcase.kind !== 'external') {
+      throw new Error('Expected external migration fixture.');
+    }
+
+    fixtures.push({
+      pageId: `70000000-0000-4000-8000-${String(index + 3).padStart(12, '0')}`,
+      content,
+      storedShowcase: {
+        ...showcase,
+        ...(includeLinks
+          ? { imageUrl: 'https://remote.example/legacy-artwork.png' }
+          : { url: '', repository: null, imageUrl: 'https://remote.example/drop-me.png' }),
+      },
+      isPublished: index % 2 === 0,
+      updatedAt: `2026-03-${String(index + 1).padStart(2, '0')}T03:04:05.000Z`,
+    });
+  }
+
+  return fixtures;
+}
 
 // SQL queries faithful to MEMBER_SYSTEM_IMPLEMENTATION.md Sections 4.1 - 4.4
 
@@ -213,6 +411,11 @@ function makeChallenge(char = 'A'): string {
   return char.repeat(43);
 }
 
+// The setup performs dozens of intentional migration probes. Over the VPS SSH
+// tunnel those sequential round trips can exceed Vitest's local-DB defaults.
+const REAL_DB_LIFECYCLE_TIMEOUT_MS = 120_000;
+const REAL_DB_MULTI_QUERY_TEST_TIMEOUT_MS = 15_000;
+
 function makeCodeHash(char = 'c'): string {
   return char.repeat(64);
 }
@@ -221,6 +424,10 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
   let ownerPool: Pool;
   let runtimePool: Pool;
   let runtimeUrl: string;
+  let memberV2BackfillSnapshots: MemberV2BackfillSnapshot[] = [];
+  let migrationPreconditionProbeResults: MigrationPreconditionProbeResult[] = [];
+  let migrationPreconditionProbeExpectedCount = 0;
+  let migrationValidEdgeProbeResult: MigrationValidEdgeProbeResult | null = null;
 
   beforeAll(async () => {
     if (!rawTestDbUrl) return;
@@ -260,7 +467,9 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migrations 0001 through 0006
+    // 2. Clean existing tables and apply migrations 0001 through 0008
+    await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_mutation_rate_limits CASCADE;`);
+    await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_assets CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_pages CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.puff_flappy_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_access_tokens CASCADE;`);
@@ -294,13 +503,515 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     const migration0006Sql = fs.readFileSync(migration0006Path, 'utf8');
     await ownerPool.query(migration0006Sql);
 
+    const migration0007Path = path.resolve(
+      __dirname,
+      '../../migrations/0007_member_page_personalization_v2.sql'
+    );
+    const migration0007Sql = fs.readFileSync(migration0007Path, 'utf8');
+    const migration0008Path = path.resolve(
+      __dirname,
+      '../../migrations/0008_member_page_moderation_privileges.sql'
+    );
+    const migration0008Sql = fs.readFileSync(migration0008Path, 'utf8');
+
+    const validExternalShowcase = {
+      kind: 'external',
+      name: 'Name',
+      shortDescription: 'Description',
+      type: 'game',
+      status: 'released',
+    };
+    const malformedLegacyFixtures: Array<{
+      label: string;
+      displayName?: string;
+      blurb?: string | null;
+      websiteUrl?: string | null;
+      socialLinks?: unknown;
+      showcase?: unknown;
+    }> = [
+      { label: 'empty display name', displayName: '   ' },
+      { label: 'over-limit display name', displayName: 'D'.repeat(81) },
+      { label: 'control character in display name', displayName: 'Bad\nName' },
+      { label: 'C1 control character in display name', displayName: 'Bad\u0085Name' },
+      { label: 'over-limit blurb', blurb: 'B'.repeat(501) },
+      { label: 'control character in blurb', blurb: 'Bad\tBlurb' },
+      { label: 'over-limit website URL', websiteUrl: makeUrlWithLength(2049) },
+      { label: 'relative website URL', websiteUrl: '/members/example' },
+      { label: 'non-HTTPS website URL', websiteUrl: 'http://example.com' },
+      { label: 'out-of-range website port', websiteUrl: 'https://example.com:99999/' },
+      {
+        label: 'uppercase scheme with out-of-range website port',
+        websiteUrl: 'HTTPS://example.com:99999/',
+      },
+      {
+        label: 'out-of-range numeric IPv4 website host',
+        websiteUrl: 'https://999.999.999.999/',
+      },
+      { label: 'malformed punycode website host', websiteUrl: 'https://xn--a.com/' },
+      {
+        label: 'uppercase scheme with malformed punycode website host',
+        websiteUrl: 'HTTPS://xn--a.com/',
+      },
+      { label: 'malformed website host', websiteUrl: 'https://%/' },
+      {
+        label: 'credentialed website URL',
+        websiteUrl: 'https://member:secret@example.com/profile',
+      },
+      { label: 'non-object social links', socialLinks: [] },
+      {
+        label: 'unknown social platform',
+        socialLinks: { linkedin: 'https://linkedin.com/in/example' },
+      },
+      { label: 'non-string social URL', socialLinks: { github: 42 } },
+      {
+        label: 'over-limit social URL',
+        socialLinks: { github: makeUrlWithLength(2049) },
+      },
+      { label: 'relative social URL', socialLinks: { github: '/example' } },
+      { label: 'non-HTTPS social URL', socialLinks: { github: 'http://github.com/example' } },
+      {
+        label: 'out-of-range numeric IPv4 social host',
+        socialLinks: { github: 'https://999.999.999.999/example' },
+      },
+      {
+        label: 'numeric final-label social host',
+        socialLinks: { github: 'https://example.123/example' },
+      },
+      {
+        label: 'credentialed social URL',
+        socialLinks: { github: 'https://member:secret@github.com/example' },
+      },
+      {
+        label: 'control character in social URL path',
+        socialLinks: { github: 'https://github.com/bad\npath' },
+      },
+      { label: 'non-object showcase', showcase: [] },
+      { label: 'missing showcase kind', showcase: {} },
+      { label: 'non-string showcase kind', showcase: { kind: 42 } },
+      { label: 'unknown showcase kind', showcase: { kind: 'unknown' } },
+      { label: 'missing project slug', showcase: { kind: 'project' } },
+      { label: 'non-string project slug', showcase: { kind: 'project', projectSlug: 42 } },
+      {
+        label: 'nonexistent project slug',
+        showcase: { kind: 'project', projectSlug: 'not-in-reviewed-registry' },
+      },
+      {
+        label: 'unknown project showcase key',
+        showcase: { kind: 'project', projectSlug: 'untitled-quiz-show', name: 'Unexpected' },
+      },
+      {
+        label: 'missing external name',
+        showcase: {
+          kind: 'external',
+          shortDescription: 'Description',
+          type: 'game',
+          status: 'released',
+        },
+      },
+      {
+        label: 'over-limit external name',
+        showcase: { ...validExternalShowcase, name: 'N'.repeat(81) },
+      },
+      {
+        label: 'control character in external name',
+        showcase: { ...validExternalShowcase, name: 'Bad\nName' },
+      },
+      {
+        label: 'missing external description',
+        showcase: { kind: 'external', name: 'Name', type: 'game', status: 'released' },
+      },
+      {
+        label: 'over-limit external description',
+        showcase: { ...validExternalShowcase, shortDescription: 'S'.repeat(501) },
+      },
+      {
+        label: 'control character in external description',
+        showcase: { ...validExternalShowcase, shortDescription: 'Bad\tDescription' },
+      },
+      {
+        label: 'missing external type',
+        showcase: {
+          kind: 'external',
+          name: 'Name',
+          shortDescription: 'Description',
+          status: 'released',
+        },
+      },
+      {
+        label: 'over-limit external type',
+        showcase: { ...validExternalShowcase, type: 'T'.repeat(81) },
+      },
+      {
+        label: 'control character in external type',
+        showcase: { ...validExternalShowcase, type: 'Bad\rType' },
+      },
+      {
+        label: 'missing external status',
+        showcase: {
+          kind: 'external',
+          name: 'Name',
+          shortDescription: 'Description',
+          type: 'game',
+        },
+      },
+      {
+        label: 'non-string external status',
+        showcase: { ...validExternalShowcase, status: 42 },
+      },
+      {
+        label: 'unsupported external status',
+        showcase: { ...validExternalShowcase, status: 'unknown' },
+      },
+      {
+        label: 'non-string external URL',
+        showcase: { ...validExternalShowcase, url: 42 },
+      },
+      {
+        label: 'over-limit external URL',
+        showcase: { ...validExternalShowcase, url: makeUrlWithLength(2049) },
+      },
+      {
+        label: 'non-HTTPS external URL',
+        showcase: { ...validExternalShowcase, url: 'http://example.com/play' },
+      },
+      {
+        label: 'malformed external IPv6 URL',
+        showcase: { ...validExternalShowcase, url: 'https://[:::]/play' },
+      },
+      {
+        label: 'out-of-range numeric IPv4 external URL host',
+        showcase: { ...validExternalShowcase, url: 'https://999.999.999.999/play' },
+      },
+      {
+        label: 'hex final-label external URL host',
+        showcase: { ...validExternalShowcase, url: 'https://foo.0x10/play' },
+      },
+      {
+        label: 'non-string external repository',
+        showcase: { ...validExternalShowcase, repository: false },
+      },
+      {
+        label: 'credentialed external repository',
+        showcase: {
+          ...validExternalShowcase,
+          repository: 'https://member:secret@example.com/repository',
+        },
+      },
+      {
+        label: 'out-of-range numeric IPv4 external repository host',
+        showcase: {
+          ...validExternalShowcase,
+          repository: 'https://999.999.999.999/repository',
+        },
+      },
+      {
+        label: 'malformed intermediate punycode external repository host',
+        showcase: {
+          ...validExternalShowcase,
+          repository: 'https://foo.xn--abc/repository',
+        },
+      },
+      {
+        label: 'invalid external image importer URL',
+        showcase: { ...validExternalShowcase, imageUrl: '/legacy-artwork.png' },
+      },
+      {
+        label: 'out-of-range numeric IPv4 external image host',
+        showcase: {
+          ...validExternalShowcase,
+          imageUrl: 'https://999.999.999.999/legacy-artwork.png',
+        },
+      },
+      {
+        label: 'octal-like final-label external image host',
+        showcase: {
+          ...validExternalShowcase,
+          imageUrl: 'https://foo.077/legacy-artwork.png',
+        },
+      },
+      {
+        label: 'unknown external showcase key',
+        showcase: { ...validExternalShowcase, artwork: 'unexpected' },
+      },
+    ];
+
+    migrationPreconditionProbeExpectedCount = malformedLegacyFixtures.length;
+    migrationPreconditionProbeResults = [];
+    for (const [index, fixture] of malformedLegacyFixtures.entries()) {
+      const client = await ownerPool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query(
+          `ALTER TABLE public.member_pages
+           DROP CONSTRAINT ck_member_pages_display_name,
+           DROP CONSTRAINT ck_member_pages_blurb,
+           DROP CONSTRAINT ck_member_pages_website_url,
+           DROP CONSTRAINT ck_member_pages_showcase_object,
+           DROP CONSTRAINT ck_member_pages_social_links_object,
+           ALTER COLUMN display_name TYPE TEXT,
+           ALTER COLUMN blurb TYPE TEXT,
+           ALTER COLUMN website_url TYPE TEXT`
+        );
+        const account = await client.query<{ id: string }>(
+          `INSERT INTO public.accounts (
+             discord_user_id,
+             membership_status,
+             access_status,
+             membership_checked_at
+           ) VALUES ($1, 'eligible', 'active', NOW())
+           RETURNING id`,
+          [makeDiscordId(1200 + index)]
+        );
+        await client.query(
+          `INSERT INTO public.member_pages (
+             owner_account_id,
+             created_by_account_id,
+             slug,
+             display_name,
+             blurb,
+             website_url,
+             social_links,
+             showcase
+           ) VALUES ($1, $1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)`,
+          [
+            account.rows[0].id,
+            `migration-precondition-${index + 1}`,
+            fixture.displayName ?? 'Malformed Legacy Fixture',
+            fixture.blurb ?? null,
+            fixture.websiteUrl ?? null,
+            JSON.stringify(fixture.socialLinks === undefined ? {} : fixture.socialLinks),
+            fixture.showcase === undefined || fixture.showcase === null
+              ? null
+              : JSON.stringify(fixture.showcase),
+          ]
+        );
+
+        try {
+          await client.query(migration0007Sql);
+          migrationPreconditionProbeResults.push({
+            label: fixture.label,
+            code: null,
+            message: 'Migration unexpectedly succeeded.',
+          });
+        } catch (error) {
+          const databaseError = error as DatabaseError;
+          migrationPreconditionProbeResults.push({
+            label: fixture.label,
+            code: databaseError.code ?? null,
+            message: databaseError.message,
+          });
+        }
+      } finally {
+        await client.query('ROLLBACK').catch(() => {});
+        client.release();
+      }
+    }
+
+    const validEdgeClient = await ownerPool.connect();
+    try {
+      await validEdgeClient.query('BEGIN');
+      await validEdgeClient.query(
+        `ALTER TABLE public.member_pages
+         DROP CONSTRAINT ck_member_pages_display_name,
+         DROP CONSTRAINT ck_member_pages_blurb,
+         DROP CONSTRAINT ck_member_pages_website_url,
+         DROP CONSTRAINT ck_member_pages_showcase_object,
+         DROP CONSTRAINT ck_member_pages_social_links_object,
+         ALTER COLUMN display_name TYPE TEXT,
+         ALTER COLUMN blurb TYPE TEXT,
+         ALTER COLUMN website_url TYPE TEXT`
+      );
+      const validEdgeAccount = await validEdgeClient.query<{ id: string }>(
+        `INSERT INTO public.accounts (
+           discord_user_id,
+           membership_status,
+           access_status,
+           membership_checked_at
+         ) VALUES ($1, 'eligible', 'active', NOW())
+         RETURNING id`,
+        [makeDiscordId(1300)]
+      );
+      await validEdgeClient.query(
+        `INSERT INTO public.member_pages (
+           id,
+           owner_account_id,
+           created_by_account_id,
+           slug,
+           display_name,
+           blurb,
+           website_url,
+           social_links,
+           showcase
+         ) VALUES ($1::uuid, $2, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb)`,
+        [
+          '71000000-0000-4000-8000-000000000001',
+          validEdgeAccount.rows[0].id,
+          'migration-valid-edge',
+          '\u00a0Cafe\u0301 Edge\uFEFF',
+          '\u00a0\uFEFF',
+          '\u3000https://example.com:65535/path\u202f',
+          JSON.stringify({
+            github: null,
+            bluesky: '',
+            mastodon: '   ',
+            x: '\u2007https://x.com/valid-edge\u205f',
+          }),
+          JSON.stringify({
+            kind: 'external',
+            name: '\u1680Edge Cafe\u0301\u2000',
+            shortDescription: '\u2028Edge description.\u2029',
+            type: '\u200agame\u3000',
+            status: 'released',
+            url: '',
+            repository: null,
+            imageUrl: '\u00a0https://remote.example/operator-import.png\ufeff',
+          }),
+        ]
+      );
+
+      try {
+        await validEdgeClient.query(migration0007Sql);
+        const migrated = await validEdgeClient.query<{ draft_doc: unknown }>(
+          `SELECT draft_doc
+           FROM public.member_pages
+           WHERE id = $1::uuid`,
+          ['71000000-0000-4000-8000-000000000001']
+        );
+        migrationValidEdgeProbeResult = {
+          code: null,
+          message: '',
+          draftDoc: migrated.rows[0]?.draft_doc ?? null,
+        };
+      } catch (error) {
+        const databaseError = error as DatabaseError;
+        migrationValidEdgeProbeResult = {
+          code: databaseError.code ?? null,
+          message: databaseError.message,
+          draftDoc: null,
+        };
+      }
+    } finally {
+      await validEdgeClient.query('ROLLBACK').catch(() => {});
+      validEdgeClient.release();
+    }
+
+    // Seed conceptual V1 fixtures before 0007 so the real migration backfill is
+    // exercised in the same disposable database as the rest of this suite.
+    const memberV2BackfillFixtures = makeMemberV2BackfillFixtures();
+    const migrationAdmin = await ownerPool.query<{ id: string }>(
+      `INSERT INTO public.accounts (
+         discord_user_id,
+         membership_status,
+         access_status,
+         membership_checked_at,
+         site_role
+       ) VALUES ($1, 'eligible', 'active', NOW(), 'admin')
+       RETURNING id`,
+      [makeDiscordId(880)]
+    );
+
+    for (const [index, fixture] of memberV2BackfillFixtures.entries()) {
+      const migrationOwner = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.accounts (
+           discord_user_id,
+           membership_status,
+           access_status,
+           membership_checked_at
+         ) VALUES ($1, 'eligible', 'active', NOW())
+         RETURNING id`,
+        [makeDiscordId(881 + index)]
+      );
+
+      await ownerPool.query(
+        `INSERT INTO public.member_pages (
+           id,
+           owner_account_id,
+           created_by_account_id,
+           slug,
+           display_name,
+           blurb,
+           website_url,
+           social_links,
+           showcase,
+           is_published,
+           created_at,
+           updated_at
+         ) VALUES (
+           $1::uuid,
+           $2::uuid,
+           $3::uuid,
+           $4,
+           $5,
+           $6,
+           $7,
+           $8::jsonb,
+           $9::jsonb,
+           $10,
+           $11::timestamptz,
+           $11::timestamptz
+         )`,
+        [
+          fixture.pageId,
+          migrationOwner.rows[0].id,
+          migrationAdmin.rows[0].id,
+          `migration-fixture-${index + 1}`,
+          fixture.storedDisplayName ?? fixture.content.displayName,
+          fixture.storedBlurb !== undefined ? fixture.storedBlurb : fixture.content.blurb,
+          fixture.storedWebsiteUrl !== undefined
+            ? fixture.storedWebsiteUrl
+            : fixture.content.websiteUrl,
+          JSON.stringify(
+            fixture.storedSocialLinks === undefined
+              ? fixture.content.socialLinks
+              : fixture.storedSocialLinks
+          ),
+          fixture.storedShowcase === null ? null : JSON.stringify(fixture.storedShowcase),
+          fixture.isPublished,
+          fixture.updatedAt,
+        ]
+      );
+    }
+
+    await ownerPool.query(migration0007Sql);
+    await ownerPool.query(migration0008Sql);
+
+    const memberV2BackfillRows = await ownerPool.query<MemberV2BackfillRow>(
+      `SELECT
+         id,
+         showcase,
+         draft_doc,
+         published_doc,
+         draft_rev,
+         draft_updated_at,
+         updated_at,
+         published_at,
+         unpublished_at,
+         moderation_hold,
+         moderation_held_at,
+         asset_pending_count,
+         asset_ready_count,
+         asset_alloc_window_started_at,
+         asset_alloc_window_count
+       FROM public.member_pages
+       WHERE id = ANY($1::uuid[])`,
+      [memberV2BackfillFixtures.map(({ pageId }) => pageId)]
+    );
+    const backfillRowsById = new Map(
+      memberV2BackfillRows.rows.map((row) => [row.id, row] as const)
+    );
+    memberV2BackfillSnapshots = memberV2BackfillFixtures.map((fixture) => {
+      const row = backfillRowsById.get(fixture.pageId);
+      if (!row) throw new Error(`Missing 0007 backfill fixture ${fixture.pageId}.`);
+      return { fixture, row };
+    });
+
     // 3. Connect as runtime role
     runtimeUrl = buildRuntimeUrl(rawTestDbUrl, TEST_RUNTIME_PASSWORD);
     runtimePool = new Pool({
       connectionString: runtimeUrl,
       max: 5,
     });
-  });
+  }, REAL_DB_LIFECYCLE_TIMEOUT_MS);
 
   afterAll(async () => {
     if (runtimePool) {
@@ -309,11 +1020,12 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     if (ownerPool) {
       await ownerPool.end().catch(() => {});
     }
-  });
+  }, REAL_DB_LIFECYCLE_TIMEOUT_MS);
 
   beforeEach(async () => {
     if (!ownerPool) return;
     // Clear data between tests to ensure test isolation in FK-safe order
+    await ownerPool.query('DELETE FROM public.member_page_assets;');
     await ownerPool.query('DELETE FROM public.member_pages;');
     await ownerPool.query('DELETE FROM public.puff_flappy_scores;');
     await ownerPool.query('DELETE FROM public.game_access_tokens;');
@@ -3048,17 +3760,36 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
       await runtimePool.query(
         `INSERT INTO public.member_pages (
-           owner_account_id, created_by_account_id, slug, display_name, website_url, showcase
-         ) VALUES ($1, $2, 'ham-friend', 'HAM Friend', 'https://example.com', $3::jsonb)`,
-        [ownerId, adminId, JSON.stringify({ kind: 'project', projectSlug: 'untitled-quiz-show' })]
+           owner_account_id,
+           created_by_account_id,
+           slug,
+           display_name,
+           website_url,
+           showcase,
+           draft_doc
+         ) VALUES (
+           $1,
+           $2,
+           'ham-friend',
+           'HAM Friend',
+           'https://example.com',
+           $3::jsonb,
+           $4::jsonb
+         )`,
+        [
+          ownerId,
+          adminId,
+          JSON.stringify({ kind: 'project', projectSlug: 'untitled-quiz-show' }),
+          JSON.stringify(makeMinimalMemberV2Document()),
+        ]
       );
 
       await expect(
         ownerPool.query(
           `INSERT INTO public.member_pages (
-             owner_account_id, created_by_account_id, slug, display_name
-           ) VALUES ($1, $2, 'another-page', 'Duplicate Owner')`,
-          [ownerId, adminId]
+             owner_account_id, created_by_account_id, slug, display_name, draft_doc
+           ) VALUES ($1, $2, 'another-page', 'Duplicate Owner', $3::jsonb)`,
+          [ownerId, adminId, JSON.stringify(makeMinimalMemberV2Document('Duplicate Owner'))]
         )
       ).rejects.toMatchObject({ code: '23505' });
 
@@ -3066,36 +3797,36 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await expect(
         ownerPool.query(
           `INSERT INTO public.member_pages (
-             owner_account_id, created_by_account_id, slug, display_name
-           ) VALUES ($1, $2, 'UPPERCASE', 'Bad Slug')`,
-          [otherOwnerId, adminId]
+             owner_account_id, created_by_account_id, slug, display_name, draft_doc
+           ) VALUES ($1, $2, 'UPPERCASE', 'Bad Slug', $3::jsonb)`,
+          [otherOwnerId, adminId, JSON.stringify(makeMinimalMemberV2Document('Bad Slug'))]
         )
       ).rejects.toThrow();
 
       await expect(
         ownerPool.query(
           `INSERT INTO public.member_pages (
-             owner_account_id, created_by_account_id, slug, display_name, social_links
-           ) VALUES ($1, $2, 'bad-socials', 'Bad Socials', '[]'::jsonb)`,
-          [otherOwnerId, adminId]
+             owner_account_id, created_by_account_id, slug, display_name, social_links, draft_doc
+           ) VALUES ($1, $2, 'bad-socials', 'Bad Socials', '[]'::jsonb, $3::jsonb)`,
+          [otherOwnerId, adminId, JSON.stringify(makeMinimalMemberV2Document('Bad Socials'))]
         )
       ).rejects.toThrow();
 
       await expect(
         ownerPool.query(
           `INSERT INTO public.member_pages (
-             owner_account_id, created_by_account_id, slug, display_name, website_url
-           ) VALUES ($1, $2, 'bad-url', 'Bad URL', 'http://example.com')`,
-          [otherOwnerId, adminId]
+             owner_account_id, created_by_account_id, slug, display_name, website_url, draft_doc
+           ) VALUES ($1, $2, 'bad-url', 'Bad URL', 'http://example.com', $3::jsonb)`,
+          [otherOwnerId, adminId, JSON.stringify(makeMinimalMemberV2Document('Bad URL'))]
         )
       ).rejects.toThrow();
 
       await expect(
         ownerPool.query(
           `INSERT INTO public.member_pages (
-             owner_account_id, created_by_account_id, slug, display_name, showcase
-           ) VALUES ($1, $2, 'bad-json', 'Bad JSON', '[]'::jsonb)`,
-          [otherOwnerId, adminId]
+             owner_account_id, created_by_account_id, slug, display_name, showcase, draft_doc
+           ) VALUES ($1, $2, 'bad-json', 'Bad JSON', '[]'::jsonb, $3::jsonb)`,
+          [otherOwnerId, adminId, JSON.stringify(makeMinimalMemberV2Document('Bad JSON'))]
         )
       ).rejects.toThrow();
     });
@@ -3145,6 +3876,2775 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await expect(
         runtimePool.query(`UPDATE public.accounts SET site_role = 'admin' WHERE id = $1`, [accountId])
       ).rejects.toMatchObject({ code: '42501' });
+    });
+  });
+
+  describe('15. Member Page Personalization V2 Migration and Assets', () => {
+    async function createV2Actors(idSuffix: number) {
+      const admin = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.accounts (
+           discord_user_id,
+           membership_status,
+           access_status,
+           membership_checked_at,
+           site_role
+         ) VALUES ($1, 'eligible', 'active', NOW(), 'admin')
+         RETURNING id`,
+        [makeDiscordId(idSuffix)]
+      );
+      const owner = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.accounts (
+           discord_user_id,
+           membership_status,
+           access_status,
+           membership_checked_at
+         ) VALUES ($1, 'eligible', 'active', NOW())
+         RETURNING id`,
+        [makeDiscordId(idSuffix + 1)]
+      );
+      return { adminId: admin.rows[0].id, ownerId: owner.rows[0].id };
+    }
+
+    async function createV2Page(idSuffix: number, slug: string, displayName = 'V2 Member') {
+      const { adminId, ownerId } = await createV2Actors(idSuffix);
+      const draft = makeMinimalMemberV2Document(displayName);
+      const page = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.member_pages (
+           owner_account_id,
+           created_by_account_id,
+           slug,
+           display_name,
+           draft_doc
+         ) VALUES ($1, $2, $3, $4, $5::jsonb)
+         RETURNING id`,
+        [ownerId, adminId, slug, displayName, JSON.stringify(draft)]
+      );
+      return { adminId, ownerId, pageId: page.rows[0].id, draft };
+    }
+
+    function documentReferencingAsset(
+      document: MemberPageDocumentV2,
+      assetId: string
+    ): MemberPageDocumentV2 {
+      return {
+        ...document,
+        frame: {
+          ...document.frame,
+          portrait: { assetId, alt: null, decorative: true },
+        },
+      };
+    }
+
+    async function insertPendingAssetFixtures(pageId: string, count: number, prefix: string) {
+      const result = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.member_page_assets (
+           member_page_id, object_key, pending_expires_at
+         )
+         SELECT $1, $2 || '-' || series::text, NOW() + INTERVAL '15 minutes'
+         FROM generate_series(1, $3::integer) series
+         RETURNING id`,
+        [pageId, prefix, count]
+      );
+      return result.rows.map(({ id }) => id);
+    }
+
+    async function insertReadyAssetFixtures(pageId: string, count: number, prefix: string) {
+      const result = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.member_page_assets (
+           member_page_id,
+           object_key,
+           status,
+           mime_type,
+           byte_size,
+           width,
+           height,
+           etag,
+           ready_at,
+           verified_at,
+           pending_expires_at
+         )
+         SELECT
+           $1,
+           $2 || '-' || series::text,
+           'ready',
+           'image/png',
+           1024,
+           100,
+           100,
+           $2 || '-' || series::text,
+           NOW(),
+           NOW(),
+           NOW() + INTERVAL '15 minutes'
+         FROM generate_series(1, $3::integer) series
+         RETURNING id`,
+        [pageId, prefix, count]
+      );
+      return result.rows.map(({ id }) => id);
+    }
+
+    async function setAssetCounterState(input: {
+      pageId: string;
+      pending: number;
+      ready: number;
+      windowStartedAt?: Date | null;
+      windowCount?: number;
+    }) {
+      await ownerPool.query(
+        `UPDATE public.member_pages
+         SET asset_pending_count = $2,
+             asset_ready_count = $3,
+             asset_alloc_window_started_at = $4,
+             asset_alloc_window_count = $5
+         WHERE id = $1`,
+        [
+          input.pageId,
+          input.pending,
+          input.ready,
+          input.windowStartedAt ?? null,
+          input.windowCount ?? 0,
+        ]
+      );
+    }
+
+    async function expectNoAssetCounterMismatches() {
+      const mismatches = await runtimePool.query<{
+        id: string;
+        asset_pending_count: number;
+        actual_pending_count: number;
+        asset_ready_count: number;
+        actual_ready_count: number;
+      }>(`
+        WITH actual AS (
+          SELECT
+            page.id,
+            page.asset_pending_count,
+            COUNT(asset.id) FILTER (
+              WHERE asset.status = 'pending'
+                AND asset.deletion_claimed_at IS NULL
+            )::integer AS actual_pending_count,
+            page.asset_ready_count,
+            COUNT(asset.id) FILTER (
+              WHERE asset.status = 'ready'
+            )::integer AS actual_ready_count
+          FROM public.member_pages page
+          LEFT JOIN public.member_page_assets asset ON asset.member_page_id = page.id
+          GROUP BY page.id
+        )
+        SELECT *
+        FROM actual
+        WHERE asset_pending_count <> actual_pending_count
+           OR asset_ready_count <> actual_ready_count
+      `);
+      expect(mismatches.rows).toEqual([]);
+    }
+
+    const ASSET_ALLOCATION_SQL = `
+      WITH page_guard AS (
+        UPDATE public.member_pages page
+        SET
+          asset_pending_count = page.asset_pending_count + 1,
+          asset_alloc_window_started_at = CASE
+            WHEN page.asset_alloc_window_started_at IS NULL
+              OR page.asset_alloc_window_started_at <= NOW() - INTERVAL '1 hour'
+              THEN NOW()
+            ELSE page.asset_alloc_window_started_at
+          END,
+          asset_alloc_window_count = CASE
+            WHEN page.asset_alloc_window_started_at IS NULL
+              OR page.asset_alloc_window_started_at <= NOW() - INTERVAL '1 hour'
+              THEN 1
+            ELSE page.asset_alloc_window_count + 1
+          END
+        WHERE page.slug = $1
+          AND page.owner_account_id = $2
+          AND $4::timestamptz > NOW()
+          AND page.asset_pending_count < 5
+          AND (
+            page.asset_alloc_window_started_at IS NULL
+            OR page.asset_alloc_window_started_at <= NOW() - INTERVAL '1 hour'
+            OR page.asset_alloc_window_count < 20
+          )
+        RETURNING page.id
+      ),
+      inserted AS (
+        INSERT INTO public.member_page_assets (
+          member_page_id,
+          object_key,
+          pending_expires_at
+        )
+        SELECT page_guard.id, $3, $4::timestamptz
+        FROM page_guard
+        RETURNING id, pending_expires_at
+      )
+      SELECT
+        'success'::text AS outcome,
+        inserted.id AS asset_id,
+        inserted.pending_expires_at
+      FROM inserted
+      UNION ALL
+      SELECT
+        CASE
+          WHEN page.asset_pending_count >= 5 THEN 'pending-limit'
+          WHEN page.asset_alloc_window_started_at IS NOT NULL
+            AND page.asset_alloc_window_started_at > NOW() - INTERVAL '1 hour'
+            AND page.asset_alloc_window_count >= 20
+            THEN 'rate-limit'
+          ELSE 'conflict'
+        END AS outcome,
+        NULL::uuid AS asset_id,
+        NULL::timestamptz AS pending_expires_at
+      FROM public.member_pages page
+      WHERE page.slug = $1
+        AND page.owner_account_id = $2
+        AND NOT EXISTS (SELECT 1 FROM page_guard)
+        AND NOT EXISTS (SELECT 1 FROM inserted)
+      LIMIT 1
+    `;
+
+    const ASSET_FINALIZE_GUARD_SQL = `
+      WITH owned_pending AS MATERIALIZED (
+        SELECT
+          asset.id,
+          asset.object_key,
+          asset.pending_expires_at,
+          page.id AS member_page_id
+        FROM public.member_page_assets asset
+        JOIN public.member_pages page ON page.id = asset.member_page_id
+        WHERE asset.id = $1
+          AND page.slug = $2
+          AND page.owner_account_id = $3
+          AND asset.status = 'pending'
+          AND asset.deletion_claimed_at IS NULL
+          AND asset.pending_expires_at > NOW()
+        FOR UPDATE OF page
+      ),
+      mutation_rate AS (
+        INSERT INTO public.member_page_mutation_rate_limits AS mutation_limit (
+          member_page_id,
+          action,
+          window_started_at,
+          attempt_count
+        )
+        SELECT owned_pending.member_page_id, 'asset-finalize', NOW(), 1
+        FROM owned_pending
+        ON CONFLICT (member_page_id, action) DO UPDATE
+        SET
+          window_started_at = CASE
+            WHEN mutation_limit.window_started_at <= NOW() - INTERVAL '5 minutes'
+              THEN NOW()
+            ELSE mutation_limit.window_started_at
+          END,
+          attempt_count = CASE
+            WHEN mutation_limit.window_started_at <= NOW() - INTERVAL '5 minutes'
+              THEN 1
+            ELSE mutation_limit.attempt_count + 1
+          END
+        WHERE mutation_limit.window_started_at <= NOW() - INTERVAL '5 minutes'
+           OR mutation_limit.attempt_count < 20
+        RETURNING member_page_id
+      )
+      SELECT
+        CASE
+          WHEN mutation_rate.member_page_id IS NULL THEN 'rate-limit'
+          ELSE 'success'
+        END AS outcome,
+        owned_pending.id,
+        owned_pending.object_key,
+        owned_pending.pending_expires_at
+      FROM owned_pending
+      LEFT JOIN mutation_rate
+        ON mutation_rate.member_page_id = owned_pending.member_page_id
+      LIMIT 1
+    `;
+
+    const ASSET_FINALIZE_SQL = `
+      WITH
+      page_guard AS MATERIALIZED (
+        SELECT
+          page.id,
+          page.slug,
+          page.owner_account_id,
+          page.asset_ready_count
+        FROM public.member_pages page
+        WHERE page.slug = $2
+          AND page.owner_account_id = $3
+        FOR UPDATE
+      ),
+      asset_ready AS (
+        UPDATE public.member_page_assets asset
+        SET
+          status = 'ready',
+          mime_type = $4,
+          byte_size = $5,
+          width = $6,
+          height = $7,
+          etag = $8,
+          ready_at = NOW(),
+          verified_at = $9
+        FROM page_guard page
+        WHERE asset.id = $1
+          AND asset.member_page_id = page.id
+          AND page.slug = $2
+          AND page.owner_account_id = $3
+          AND asset.status = 'pending'
+          AND asset.deletion_claimed_at IS NULL
+          AND asset.pending_expires_at > NOW()
+          AND page.asset_ready_count < 20
+        RETURNING
+          asset.id AS asset_id,
+          asset.member_page_id,
+          asset.mime_type,
+          asset.width,
+          asset.height,
+          asset.ready_at,
+          asset.verified_at
+      ),
+      page_counter AS (
+        UPDATE public.member_pages page
+        SET
+          asset_pending_count = page.asset_pending_count - 1,
+          asset_ready_count = page.asset_ready_count + 1
+        FROM asset_ready
+        WHERE page.id = asset_ready.member_page_id
+        RETURNING page.id
+      )
+      SELECT
+        'success'::text AS outcome,
+        asset_ready.asset_id,
+        asset_ready.mime_type,
+        asset_ready.width,
+        asset_ready.height,
+        asset_ready.ready_at,
+        asset_ready.verified_at
+      FROM asset_ready
+      JOIN page_counter ON page_counter.id = asset_ready.member_page_id
+      UNION ALL
+      SELECT
+        'quota'::text AS outcome,
+        NULL::uuid AS asset_id,
+        NULL::varchar AS mime_type,
+        NULL::integer AS width,
+        NULL::integer AS height,
+        NULL::timestamptz AS ready_at,
+        NULL::timestamptz AS verified_at
+      FROM public.member_page_assets asset
+      JOIN page_guard page ON page.id = asset.member_page_id
+      WHERE asset.id = $1
+        AND page.slug = $2
+        AND page.owner_account_id = $3
+        AND asset.status = 'pending'
+        AND asset.deletion_claimed_at IS NULL
+        AND asset.pending_expires_at > NOW()
+        AND page.asset_ready_count >= 20
+        AND NOT EXISTS (SELECT 1 FROM asset_ready)
+      LIMIT 1
+    `;
+
+    const ASSET_DELETE_CLAIM_SQL = `
+      WITH page_guard AS MATERIALIZED (
+        SELECT id, draft_doc, published_doc
+        FROM public.member_pages
+        WHERE slug = $2
+          AND owner_account_id = $3
+        FOR UPDATE
+      ),
+      target AS MATERIALIZED (
+        SELECT
+          asset.id,
+          asset.member_page_id,
+          asset.object_key,
+          asset.status,
+          asset.etag,
+          asset.created_at,
+          (asset.deletion_claimed_at IS NOT NULL) AS already_claimed,
+          (
+            jsonb_path_exists(
+              page_guard.draft_doc,
+              '$.**.assetId ? (@ == $assetId)',
+              jsonb_build_object('assetId', to_jsonb(asset.id::text)),
+              TRUE
+            )
+            OR jsonb_path_exists(
+              COALESCE(page_guard.published_doc, 'null'::jsonb),
+              '$.**.assetId ? (@ == $assetId)',
+              jsonb_build_object('assetId', to_jsonb(asset.id::text)),
+              TRUE
+            )
+          ) AS is_referenced
+        FROM public.member_page_assets asset
+        JOIN page_guard ON page_guard.id = asset.member_page_id
+        WHERE asset.id = $1
+        FOR UPDATE OF asset
+      ),
+      newly_claimed AS (
+        UPDATE public.member_page_assets asset
+        SET deletion_claimed_at = NOW()
+        FROM target
+        WHERE asset.id = target.id
+          AND NOT target.already_claimed
+          AND NOT target.is_referenced
+          AND asset.deletion_claimed_at IS NULL
+        RETURNING
+          asset.id,
+          asset.member_page_id,
+          asset.object_key,
+          asset.status,
+          asset.etag,
+          asset.created_at
+      ),
+      page_adjusted AS (
+        UPDATE public.member_pages page
+        SET asset_pending_count = page.asset_pending_count - CASE
+          WHEN newly_claimed.status = 'pending' THEN 1 ELSE 0
+        END
+        FROM newly_claimed
+        WHERE page.id = newly_claimed.member_page_id
+        RETURNING page.id
+      )
+      SELECT
+        'success'::text AS outcome,
+        newly_claimed.id,
+        newly_claimed.status,
+        TRUE AS newly_claimed
+      FROM newly_claimed
+      JOIN page_adjusted ON page_adjusted.id = newly_claimed.member_page_id
+      UNION ALL
+      SELECT 'success'::text, target.id, target.status, FALSE
+      FROM target
+      WHERE target.already_claimed
+      UNION ALL
+      SELECT
+        CASE WHEN target.is_referenced THEN 'referenced' ELSE 'conflict' END,
+        NULL::uuid,
+        NULL::varchar,
+        NULL::boolean
+      FROM target
+      WHERE NOT target.already_claimed
+        AND NOT EXISTS (SELECT 1 FROM newly_claimed)
+      UNION ALL
+      SELECT 'not-found'::text, NULL::uuid, NULL::varchar, NULL::boolean
+      WHERE NOT EXISTS (SELECT 1 FROM target)
+      LIMIT 1
+    `;
+
+    const ASSET_DELETE_METADATA_SQL = `
+      WITH page_guard AS MATERIALIZED (
+        SELECT page.id
+        FROM public.member_pages page
+        JOIN public.member_page_assets asset
+          ON asset.member_page_id = page.id
+        WHERE asset.id = $1
+          AND asset.object_key = $2
+          AND asset.deletion_claimed_at IS NOT NULL
+          AND asset.etag IS NOT DISTINCT FROM $3
+          AND asset.pending_expires_at <= NOW()
+        FOR UPDATE OF page
+      ),
+      deleted AS (
+        DELETE FROM public.member_page_assets asset
+        USING page_guard
+        WHERE asset.id = $1
+          AND asset.member_page_id = page_guard.id
+          AND asset.object_key = $2
+          AND asset.deletion_claimed_at IS NOT NULL
+          AND asset.etag IS NOT DISTINCT FROM $3
+          AND asset.pending_expires_at <= NOW()
+        RETURNING asset.id, asset.member_page_id, asset.status
+      ),
+      page_adjusted AS (
+        UPDATE public.member_pages page
+        SET asset_ready_count = page.asset_ready_count - CASE
+          WHEN deleted.status = 'ready' THEN 1 ELSE 0
+        END
+        FROM deleted
+        WHERE page.id = deleted.member_page_id
+        RETURNING page.id
+      )
+      SELECT deleted.id, deleted.status
+      FROM deleted
+      JOIN page_adjusted ON page_adjusted.id = deleted.member_page_id
+    `;
+
+    const BRIDGE_SET_PUBLICATION_SQL = `
+      UPDATE public.member_pages
+      SET
+        published_doc = CASE WHEN $2 THEN draft_doc ELSE published_doc END,
+        display_name = CASE WHEN $2 THEN draft_doc #>> '{frame,displayName}' ELSE display_name END,
+        blurb = CASE WHEN $2 THEN draft_doc #>> '{frame,summary}' ELSE blurb END,
+        is_published = $2,
+        published_at = CASE WHEN $2 THEN NOW() ELSE published_at END,
+        unpublished_at = CASE WHEN $2 THEN NULL ELSE NOW() END,
+        updated_at = NOW()
+      WHERE id = $1
+        AND (NOT $2 OR moderation_hold = FALSE)
+        AND (
+          NOT $2
+          OR draft_doc = jsonb_build_object(
+            'schemaVersion', 2,
+            'frame', jsonb_build_object(
+              'displayName', BTRIM(
+                NORMALIZE(display_name, NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ),
+              'summary', NULLIF(BTRIM(
+                NORMALIZE(blurb, NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'websiteUrl', NULLIF(BTRIM(
+                NORMALIZE(website_url, NFC),
+                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+              ), ''),
+              'socialLinks', jsonb_strip_nulls(jsonb_build_object(
+                'github', NULLIF(BTRIM(
+                  NORMALIZE(social_links->>'github', NFC),
+                  U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                ), ''),
+                'bluesky', NULLIF(BTRIM(
+                  NORMALIZE(social_links->>'bluesky', NFC),
+                  U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                ), ''),
+                'mastodon', NULLIF(BTRIM(
+                  NORMALIZE(social_links->>'mastodon', NFC),
+                  U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                ), ''),
+                'instagram', NULLIF(BTRIM(
+                  NORMALIZE(social_links->>'instagram', NFC),
+                  U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                ), ''),
+                'youtube', NULLIF(BTRIM(
+                  NORMALIZE(social_links->>'youtube', NFC),
+                  U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                ), ''),
+                'twitch', NULLIF(BTRIM(
+                  NORMALIZE(social_links->>'twitch', NFC),
+                  U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                ), ''),
+                'x', NULLIF(BTRIM(
+                  NORMALIZE(social_links->>'x', NFC),
+                  U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                ), '')
+              )),
+              'portrait', NULL,
+              'theme', jsonb_build_object('id', 'paper', 'accentId', 'default')
+            ),
+            'blocks', CASE
+              WHEN showcase IS NULL THEN '[]'::jsonb
+              WHEN showcase->>'kind' = 'project' THEN
+                jsonb_build_array(
+                  jsonb_build_object(
+                    'id', 'legacy-featured-' || id::text,
+                    'type', 'featuredProject',
+                    'variant', 'card',
+                    'project', jsonb_build_object(
+                      'kind', 'ham',
+                      'projectSlug', showcase->>'projectSlug'
+                    )
+                  )
+                )
+              WHEN showcase->>'kind' = 'external' THEN
+                jsonb_build_array(
+                  jsonb_build_object(
+                    'id', 'legacy-featured-' || id::text,
+                    'type', 'featuredProject',
+                    'variant', 'card',
+                    'project', jsonb_strip_nulls(
+                      jsonb_build_object(
+                        'kind', 'external',
+                        'name', BTRIM(
+                          NORMALIZE(showcase->>'name', NFC),
+                          U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                        ),
+                        'shortDescription', BTRIM(
+                          NORMALIZE(showcase->>'shortDescription', NFC),
+                          U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                        ),
+                        'type', BTRIM(
+                          NORMALIZE(showcase->>'type', NFC),
+                          U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                        ),
+                        'status', showcase->>'status',
+                        'url', NULLIF(BTRIM(
+                          NORMALIZE(showcase->>'url', NFC),
+                          U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                        ), ''),
+                        'repository', NULLIF(BTRIM(
+                          NORMALIZE(showcase->>'repository', NFC),
+                          U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                        ), ''),
+                        'artwork', CASE
+                          WHEN
+                            JSONB_TYPEOF(
+                              draft_doc #> '{blocks,0,project,artwork}'
+                            ) = 'object'
+                            AND (
+                              draft_doc #> '{blocks,0,project,artwork}'
+                            ) ?& ARRAY['assetId', 'alt', 'decorative']
+                            AND NOT EXISTS (
+                              SELECT 1
+                              FROM JSONB_OBJECT_KEYS(
+                                draft_doc #> '{blocks,0,project,artwork}'
+                              ) AS artwork_key(key)
+                              WHERE artwork_key.key NOT IN (
+                                'assetId',
+                                'alt',
+                                'decorative'
+                              )
+                            )
+                            AND JSONB_TYPEOF(
+                              draft_doc #> '{blocks,0,project,artwork,assetId}'
+                            ) = 'string'
+                            AND JSONB_TYPEOF(
+                              draft_doc #> '{blocks,0,project,artwork,decorative}'
+                            ) = 'boolean'
+                            AND (
+                              (
+                                draft_doc #>> '{blocks,0,project,artwork,decorative}'
+                              ) = 'true'
+                              AND (
+                                draft_doc #> '{blocks,0,project,artwork,alt}'
+                              ) = 'null'::jsonb
+                              OR (
+                                draft_doc #>> '{blocks,0,project,artwork,decorative}'
+                              ) = 'false'
+                              AND JSONB_TYPEOF(
+                                draft_doc #> '{blocks,0,project,artwork,alt}'
+                              ) = 'string'
+                              AND BTRIM(
+                                NORMALIZE(
+                                  draft_doc #>> '{blocks,0,project,artwork,alt}',
+                                  NFC
+                                ),
+                                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                              ) = (
+                                draft_doc #>> '{blocks,0,project,artwork,alt}'
+                              )
+                              AND BTRIM(
+                                NORMALIZE(
+                                  draft_doc #>> '{blocks,0,project,artwork,alt}',
+                                  NFC
+                                ),
+                                U&'\\0020\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000\\FEFF'
+                              ) <> ''
+                              AND LENGTH(
+                                draft_doc #>> '{blocks,0,project,artwork,alt}'
+                              ) <= 500
+                              AND NOT EXISTS (
+                                SELECT 1
+                                FROM GENERATE_SERIES(
+                                  1,
+                                  LENGTH(
+                                    draft_doc #>> '{blocks,0,project,artwork,alt}'
+                                  )
+                                ) AS codepoint_index(position)
+                                WHERE ASCII(SUBSTRING(
+                                  draft_doc #>> '{blocks,0,project,artwork,alt}'
+                                  FROM codepoint_index.position FOR 1
+                                )) BETWEEN 1 AND 31
+                                   OR ASCII(SUBSTRING(
+                                     draft_doc #>> '{blocks,0,project,artwork,alt}'
+                                     FROM codepoint_index.position FOR 1
+                                   )) BETWEEN 127 AND 159
+                              )
+                            )
+                            AND EXISTS (
+                              SELECT 1
+                              FROM public.member_page_assets asset
+                              WHERE asset.member_page_id = member_pages.id
+                                AND asset.id::text = (
+                                  draft_doc #>> '{blocks,0,project,artwork,assetId}'
+                                )
+                                AND asset.status = 'ready'
+                                AND asset.deletion_claimed_at IS NULL
+                            )
+                            THEN draft_doc #> '{blocks,0,project,artwork}'
+                          ELSE NULL
+                        END
+                      )
+                    )
+                  )
+                )
+              ELSE '[]'::jsonb
+            END
+          )
+        )
+      RETURNING slug
+    `;
+
+    const V2_AUTOSAVE_SQL = `
+      WITH owned_page AS MATERIALIZED (
+        SELECT page.id, page.draft_rev
+        FROM public.member_pages page
+        WHERE page.slug = $1
+          AND page.owner_account_id = $2
+        FOR UPDATE OF page
+      ),
+      mutation_rate AS (
+        INSERT INTO public.member_page_mutation_rate_limits AS mutation_limit (
+          member_page_id,
+          action,
+          window_started_at,
+          attempt_count
+        )
+        SELECT owned_page.id, 'autosave', NOW(), 1
+        FROM owned_page
+        ON CONFLICT (member_page_id, action) DO UPDATE
+        SET
+          window_started_at = CASE
+            WHEN mutation_limit.window_started_at <= NOW() - INTERVAL '1 minute'
+              THEN NOW()
+            ELSE mutation_limit.window_started_at
+          END,
+          attempt_count = CASE
+            WHEN mutation_limit.window_started_at <= NOW() - INTERVAL '1 minute'
+              THEN 1
+            ELSE mutation_limit.attempt_count + 1
+          END
+        WHERE mutation_limit.window_started_at <= NOW() - INTERVAL '1 minute'
+           OR mutation_limit.attempt_count < 120
+        RETURNING member_page_id
+      ),
+      target AS MATERIALIZED (
+        SELECT page.id, page.draft_rev
+        FROM public.member_pages page
+        JOIN owned_page ON owned_page.id = page.id
+        JOIN mutation_rate ON mutation_rate.member_page_id = page.id
+        WHERE page.slug = $1
+          AND page.owner_account_id = $2
+        FOR UPDATE OF page
+      ),
+      matched_assets AS MATERIALIZED (
+        SELECT asset.id
+        FROM public.member_page_assets asset
+        JOIN target ON target.id = asset.member_page_id
+        JOIN jsonb_array_elements_text($3::jsonb) reference(asset_id)
+          ON asset.id::text = reference.asset_id
+        WHERE asset.status = 'ready'
+          AND asset.deletion_claimed_at IS NULL
+        FOR SHARE OF asset
+      ),
+      updated AS (
+        UPDATE public.member_pages page
+        SET
+          draft_doc = $4::jsonb,
+          draft_rev = page.draft_rev + 1,
+          draft_updated_at = NOW(),
+          updated_at = NOW()
+        FROM target
+        WHERE page.id = target.id
+          AND page.slug = $1
+          AND page.owner_account_id = $2
+          AND page.draft_rev = $5
+          AND (SELECT COUNT(*) FROM matched_assets) = $6
+        RETURNING page.draft_rev, page.draft_updated_at
+      )
+      SELECT 'success'::text AS outcome, updated.draft_rev, updated.draft_updated_at
+      FROM updated
+      UNION ALL
+      SELECT
+        CASE
+          WHEN target.draft_rev <> $5 THEN 'conflict'
+          WHEN (SELECT COUNT(*) FROM matched_assets) <> $6 THEN 'invalid'
+          ELSE 'conflict'
+        END,
+        target.draft_rev,
+        NULL::timestamptz
+      FROM target
+      WHERE NOT EXISTS (SELECT 1 FROM updated)
+      UNION ALL
+      SELECT
+        'rate-limit'::text,
+        owned_page.draft_rev,
+        NULL::timestamptz
+      FROM owned_page
+      WHERE NOT EXISTS (SELECT 1 FROM mutation_rate)
+      LIMIT 1
+    `;
+
+    const V2_PUBLISH_DRAFT_SQL = `
+      WITH owned_page AS MATERIALIZED (
+        SELECT page.id, page.draft_doc, page.draft_rev, page.moderation_hold
+        FROM public.member_pages page
+        WHERE page.slug = $1
+          AND page.owner_account_id = $2
+        FOR UPDATE OF page
+      ),
+      mutation_rate AS (
+        INSERT INTO public.member_page_mutation_rate_limits AS mutation_limit (
+          member_page_id,
+          action,
+          window_started_at,
+          attempt_count
+        )
+        SELECT owned_page.id, 'publish', NOW(), 1
+        FROM owned_page
+        ON CONFLICT (member_page_id, action) DO UPDATE
+        SET
+          window_started_at = CASE
+            WHEN mutation_limit.window_started_at <= NOW() - INTERVAL '5 minutes'
+              THEN NOW()
+            ELSE mutation_limit.window_started_at
+          END,
+          attempt_count = CASE
+            WHEN mutation_limit.window_started_at <= NOW() - INTERVAL '5 minutes'
+              THEN 1
+            ELSE mutation_limit.attempt_count + 1
+          END
+        WHERE mutation_limit.window_started_at <= NOW() - INTERVAL '5 minutes'
+           OR mutation_limit.attempt_count < 10
+        RETURNING member_page_id
+      )
+      SELECT
+        CASE
+          WHEN mutation_rate.member_page_id IS NULL THEN 'rate-limit'
+          ELSE 'success'
+        END AS outcome,
+        owned_page.draft_doc,
+        owned_page.draft_rev,
+        owned_page.moderation_hold
+      FROM owned_page
+      LEFT JOIN mutation_rate ON mutation_rate.member_page_id = owned_page.id
+      LIMIT 1
+    `;
+
+    const V2_PUBLISH_SQL = `
+      WITH target AS MATERIALIZED (
+        SELECT id, draft_doc, draft_rev, moderation_hold
+        FROM public.member_pages
+        WHERE slug = $1
+          AND owner_account_id = $2
+        FOR UPDATE
+      ),
+      matched_assets AS MATERIALIZED (
+        SELECT asset.id
+        FROM public.member_page_assets asset
+        JOIN target ON target.id = asset.member_page_id
+        JOIN jsonb_array_elements_text($3::jsonb) reference(asset_id)
+          ON asset.id::text = reference.asset_id
+        WHERE asset.status = 'ready'
+          AND asset.deletion_claimed_at IS NULL
+        FOR SHARE OF asset
+      ),
+      updated AS (
+        UPDATE public.member_pages page
+        SET
+          published_doc = page.draft_doc,
+          display_name = $7,
+          blurb = $8,
+          is_published = TRUE,
+          published_at = NOW(),
+          unpublished_at = NULL,
+          updated_at = NOW()
+        FROM target
+        WHERE page.id = target.id
+          AND page.slug = $1
+          AND page.owner_account_id = $2
+          AND page.draft_rev = $5
+          AND page.draft_doc = $4::jsonb
+          AND page.moderation_hold = FALSE
+          AND (SELECT COUNT(*) FROM matched_assets) = $6
+        RETURNING page.slug, page.draft_rev, page.published_at
+      )
+      SELECT
+        'success'::text AS outcome,
+        updated.slug,
+        updated.draft_rev,
+        updated.published_at
+      FROM updated
+      UNION ALL
+      SELECT
+        CASE
+          WHEN target.draft_rev <> $5 OR target.draft_doc <> $4::jsonb THEN 'conflict'
+          WHEN target.moderation_hold THEN 'hold'
+          WHEN (SELECT COUNT(*) FROM matched_assets) <> $6 THEN 'invalid'
+          ELSE 'conflict'
+        END,
+        NULL::text,
+        target.draft_rev,
+        NULL::timestamptz
+      FROM target
+      WHERE NOT EXISTS (SELECT 1 FROM updated)
+      LIMIT 1
+    `;
+
+    it('aborts before backfill for every malformed legacy conversion precondition', () => {
+      expect(migrationPreconditionProbeResults).toHaveLength(
+        migrationPreconditionProbeExpectedCount
+      );
+      for (const result of migrationPreconditionProbeResults) {
+        expect(result, result.label).toMatchObject({ code: '23514' });
+        expect(result.message).toContain(
+          '0007 precondition failed: malformed or unsupported legacy member page'
+        );
+      }
+    });
+
+    it('backfills the exact NFC and ECMAScript-trimmed legacy document', () => {
+      expect(migrationValidEdgeProbeResult).toMatchObject({ code: null, message: '' });
+      if (!migrationValidEdgeProbeResult) throw new Error('Missing valid migration edge probe.');
+
+      const expected = legacyToDoc(
+        {
+          displayName: 'Café Edge',
+          blurb: null,
+          websiteUrl: 'https://example.com:65535/path',
+          socialLinks: { x: 'https://x.com/valid-edge' },
+          showcase: {
+            kind: 'external',
+            name: 'Edge Café',
+            shortDescription: 'Edge description.',
+            type: 'game',
+            status: 'released',
+          },
+        },
+        { ids: () => 'legacy-featured-71000000-0000-4000-8000-000000000001' }
+      );
+      expect(migrationValidEdgeProbeResult.draftDoc).toEqual(expected);
+      const parsed = parseMemberPageDocumentV2(migrationValidEdgeProbeResult.draftDoc);
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) throw new Error(JSON.stringify(parsed.errors));
+      expect(parsed.doc).toEqual(migrationValidEdgeProbeResult.draftDoc);
+      expect(JSON.stringify(migrationValidEdgeProbeResult.draftDoc)).not.toContain('imageUrl');
+    });
+
+    it('backfills canonical V2 documents for published and unpublished V1 fixtures', () => {
+      expect(memberV2BackfillSnapshots).toHaveLength(3 + ALL_PROJECT_STATUSES.length);
+
+      for (const { fixture, row } of memberV2BackfillSnapshots) {
+        const expected = legacyToDoc(fixture.content, {
+          ids: () => `legacy-featured-${fixture.pageId}`,
+        });
+        const parsedDraft = parseMemberPageDocumentV2(row.draft_doc);
+        expect(parsedDraft.success).toBe(true);
+        if (!parsedDraft.success) throw new Error(JSON.stringify(parsedDraft.errors));
+        expect(parsedDraft.doc).toEqual(expected);
+        expect(row.draft_doc).toEqual(expected);
+
+        if (fixture.isPublished) {
+          expect(row.published_doc).toEqual(row.draft_doc);
+          const parsedPublished = parseMemberPageDocumentV2(row.published_doc);
+          expect(parsedPublished.success).toBe(true);
+          if (!parsedPublished.success) throw new Error(JSON.stringify(parsedPublished.errors));
+          expect(parsedPublished.doc).toEqual(expected);
+        } else {
+          expect(row.published_doc).toBeNull();
+        }
+
+        const serializedDraft = JSON.stringify(row.draft_doc);
+        expect(serializedDraft).not.toContain('imageUrl');
+        expect(serializedDraft).not.toContain('remote.example');
+        expect(row.showcase).toEqual(fixture.storedShowcase);
+        expect(Number(row.draft_rev)).toBe(0);
+        expect(row.draft_updated_at).toEqual(row.updated_at);
+        expect(row.draft_updated_at.toISOString()).toBe(fixture.updatedAt);
+        expect(row.published_at).toBeNull();
+        expect(row.unpublished_at).toBeNull();
+        expect(row.moderation_hold).toBe(false);
+        expect(row.moderation_held_at).toBeNull();
+        expect(row.asset_pending_count).toBe(0);
+        expect(row.asset_ready_count).toBe(0);
+        expect(row.asset_alloc_window_started_at).toBeNull();
+        expect(row.asset_alloc_window_count).toBe(0);
+      }
+    });
+
+    it('accepts limit edges and canonicalizes valid empty legacy optional values', () => {
+      const snapshot = memberV2BackfillSnapshots.find(
+        ({ fixture }) => fixture.pageId === '70000000-0000-4000-8000-000000000009'
+      );
+      expect(snapshot).toBeDefined();
+      if (!snapshot) throw new Error('Missing legacy normalization edge fixture.');
+
+      expect(snapshot.row.draft_doc).toEqual(
+        legacyToDoc(snapshot.fixture.content, {
+          ids: () => `legacy-featured-${snapshot.fixture.pageId}`,
+        })
+      );
+      expect(snapshot.fixture.content.displayName).toHaveLength(80);
+      expect(snapshot.fixture.content.blurb).toHaveLength(500);
+      expect(snapshot.fixture.content.websiteUrl).toHaveLength(2048);
+      expect(snapshot.fixture.content.socialLinks.x).toHaveLength(2048);
+      expect(snapshot.fixture.content.showcase).toMatchObject({
+        name: 'N'.repeat(80),
+        shortDescription: 'S'.repeat(500),
+        type: 'T'.repeat(80),
+      });
+      expect(snapshot.row.showcase).toMatchObject({
+        imageUrl: 'https://remote.example/operator-import-edge.png',
+      });
+      expect(JSON.stringify(snapshot.row.draft_doc)).not.toContain('imageUrl');
+    });
+
+    it('installs the V2 columns, stable constraints, asset FK, and asset indexes', async () => {
+      const pageColumns = await ownerPool.query<{
+        column_name: string;
+        data_type: string;
+        is_nullable: 'YES' | 'NO';
+        column_default: string | null;
+      }>(`
+        SELECT column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'member_pages'
+          AND column_name IN (
+            'draft_doc',
+            'published_doc',
+            'draft_rev',
+            'draft_updated_at',
+            'published_at',
+            'unpublished_at',
+            'moderation_hold',
+            'moderation_held_at',
+            'asset_pending_count',
+            'asset_ready_count',
+            'asset_alloc_window_started_at',
+            'asset_alloc_window_count'
+          )
+      `);
+      const columnsByName = new Map(pageColumns.rows.map((column) => [column.column_name, column]));
+      expect(columnsByName.size).toBe(12);
+      expect(columnsByName.get('draft_doc')).toMatchObject({
+        data_type: 'jsonb',
+        is_nullable: 'NO',
+        column_default: null,
+      });
+      expect(columnsByName.get('published_doc')).toMatchObject({
+        data_type: 'jsonb',
+        is_nullable: 'YES',
+        column_default: null,
+      });
+      expect(columnsByName.get('draft_rev')).toMatchObject({
+        data_type: 'bigint',
+        is_nullable: 'NO',
+        column_default: '0',
+      });
+      expect(columnsByName.get('draft_updated_at')).toMatchObject({
+        data_type: 'timestamp with time zone',
+        is_nullable: 'NO',
+      });
+      expect(columnsByName.get('draft_updated_at')?.column_default).toMatch(/now\(\)/i);
+      expect(columnsByName.get('moderation_hold')).toMatchObject({
+        data_type: 'boolean',
+        is_nullable: 'NO',
+        column_default: 'false',
+      });
+      expect(columnsByName.get('asset_pending_count')).toMatchObject({
+        data_type: 'integer',
+        is_nullable: 'NO',
+        column_default: '0',
+      });
+      expect(columnsByName.get('asset_ready_count')).toMatchObject({
+        data_type: 'integer',
+        is_nullable: 'NO',
+        column_default: '0',
+      });
+      expect(columnsByName.get('asset_alloc_window_started_at')).toMatchObject({
+        data_type: 'timestamp with time zone',
+        is_nullable: 'YES',
+        column_default: null,
+      });
+      expect(columnsByName.get('asset_alloc_window_count')).toMatchObject({
+        data_type: 'integer',
+        is_nullable: 'NO',
+        column_default: '0',
+      });
+
+      const pageConstraints = await ownerPool.query<{ conname: string }>(`
+        SELECT conname
+        FROM pg_constraint
+        WHERE conrelid = 'public.member_pages'::regclass
+      `);
+      expect(pageConstraints.rows.map(({ conname }) => conname)).toEqual(
+        expect.arrayContaining([
+          'ck_member_pages_draft_doc_v2',
+          'ck_member_pages_published_doc_v2',
+          'ck_member_pages_published_doc_required',
+          'ck_member_pages_hold_not_public',
+          'ck_member_pages_draft_rev_nonnegative',
+          'ck_member_pages_draft_doc_size',
+          'ck_member_pages_published_doc_size',
+          'ck_member_pages_asset_pending_count',
+          'ck_member_pages_asset_ready_count',
+          'ck_member_pages_asset_alloc_window_count',
+          'ck_member_pages_asset_alloc_window_state',
+        ])
+      );
+
+      const rateLimitColumns = await ownerPool.query<{
+        column_name: string;
+        data_type: string;
+        is_nullable: 'YES' | 'NO';
+        character_maximum_length: number | null;
+      }>(`
+        SELECT column_name, data_type, is_nullable, character_maximum_length
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'member_page_mutation_rate_limits'
+        ORDER BY ordinal_position
+      `);
+      expect(rateLimitColumns.rows).toEqual([
+        expect.objectContaining({
+          column_name: 'member_page_id',
+          data_type: 'uuid',
+          is_nullable: 'NO',
+        }),
+        expect.objectContaining({
+          column_name: 'action',
+          data_type: 'character varying',
+          is_nullable: 'NO',
+          character_maximum_length: 32,
+        }),
+        expect.objectContaining({
+          column_name: 'window_started_at',
+          data_type: 'timestamp with time zone',
+          is_nullable: 'NO',
+        }),
+        expect.objectContaining({
+          column_name: 'attempt_count',
+          data_type: 'integer',
+          is_nullable: 'NO',
+        }),
+      ]);
+      const rateLimitConstraints = await ownerPool.query<{
+        conname: string;
+        definition: string;
+      }>(`
+        SELECT conname, pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+        WHERE conrelid = 'public.member_page_mutation_rate_limits'::regclass
+      `);
+      const rateLimitConstraintsByName = new Map(
+        rateLimitConstraints.rows.map(({ conname, definition }) => [conname, definition])
+      );
+      expect([...rateLimitConstraintsByName.keys()]).toEqual(
+        expect.arrayContaining([
+          'pk_member_page_mutation_rate_limits',
+          'fk_member_page_mutation_rate_limits_page',
+          'ck_member_page_mutation_rate_limits_action',
+          'ck_member_page_mutation_rate_limits_count',
+        ])
+      );
+      expect(
+        rateLimitConstraintsByName.get('fk_member_page_mutation_rate_limits_page')
+      ).toContain('ON DELETE CASCADE');
+
+      const assetColumns = await ownerPool.query<{
+        column_name: string;
+        data_type: string;
+        is_nullable: 'YES' | 'NO';
+        column_default: string | null;
+        character_maximum_length: number | null;
+      }>(`
+        SELECT
+          column_name,
+          data_type,
+          is_nullable,
+          column_default,
+          character_maximum_length
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'member_page_assets'
+      `);
+      expect(assetColumns.rows.map(({ column_name }) => column_name)).toEqual(
+        expect.arrayContaining([
+          'id',
+          'member_page_id',
+          'object_key',
+          'status',
+          'mime_type',
+          'byte_size',
+          'width',
+          'height',
+          'etag',
+          'created_at',
+          'ready_at',
+          'verified_at',
+          'pending_expires_at',
+          'deletion_claimed_at',
+        ])
+      );
+      const assetColumnsByName = new Map(
+        assetColumns.rows.map((column) => [column.column_name, column])
+      );
+      expect(assetColumnsByName.size).toBe(14);
+      expect(assetColumnsByName.get('id')).toMatchObject({
+        data_type: 'uuid',
+        is_nullable: 'NO',
+      });
+      expect(assetColumnsByName.get('id')?.column_default).toMatch(/gen_random_uuid\(\)/i);
+      expect(assetColumnsByName.get('status')).toMatchObject({
+        data_type: 'character varying',
+        is_nullable: 'NO',
+        character_maximum_length: 16,
+      });
+      expect(assetColumnsByName.get('status')?.column_default).toContain('pending');
+      expect(assetColumnsByName.get('mime_type')).toMatchObject({
+        data_type: 'character varying',
+        is_nullable: 'YES',
+        character_maximum_length: 32,
+      });
+      expect(assetColumnsByName.get('etag')).toMatchObject({
+        data_type: 'text',
+        is_nullable: 'YES',
+        column_default: null,
+        character_maximum_length: null,
+      });
+      expect(assetColumnsByName.get('verified_at')).toMatchObject({
+        data_type: 'timestamp with time zone',
+        is_nullable: 'YES',
+        column_default: null,
+      });
+      expect(assetColumnsByName.get('pending_expires_at')).toMatchObject({
+        data_type: 'timestamp with time zone',
+        is_nullable: 'NO',
+        column_default: null,
+      });
+      expect(assetColumnsByName.get('created_at')?.column_default).toMatch(/now\(\)/i);
+      expect(assetColumnsByName.get('deletion_claimed_at')).toMatchObject({
+        data_type: 'timestamp with time zone',
+        is_nullable: 'YES',
+        column_default: null,
+      });
+
+      const assetConstraints = await ownerPool.query<{
+        conname: string;
+        definition: string;
+      }>(`
+        SELECT conname, pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+        WHERE conrelid = 'public.member_page_assets'::regclass
+      `);
+      const assetConstraintsByName = new Map(
+        assetConstraints.rows.map((constraint) => [constraint.conname, constraint.definition])
+      );
+      expect([...assetConstraintsByName.keys()]).toEqual(
+        expect.arrayContaining([
+          'fk_member_page_assets_member_page',
+          'uq_member_page_assets_object_key',
+          'ck_member_page_assets_status',
+          'ck_member_page_assets_mime_type',
+          'ck_member_page_assets_byte_size',
+          'ck_member_page_assets_dimensions',
+          'ck_member_page_assets_etag',
+          'ck_member_page_assets_ready_complete',
+          'ck_member_page_assets_pending_incomplete',
+        ])
+      );
+      expect(assetConstraintsByName.get('fk_member_page_assets_member_page')).toContain(
+        'ON DELETE RESTRICT'
+      );
+
+      const assetIndexes = await ownerPool.query<{ indexname: string; indexdef: string }>(`
+        SELECT indexname, indexdef
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'member_page_assets'
+          AND indexname IN (
+            'ix_member_page_assets_page',
+            'ix_member_page_assets_pending_expiry'
+          )
+      `);
+      const assetIndexesByName = new Map(
+        assetIndexes.rows.map(({ indexname, indexdef }) => [indexname, indexdef])
+      );
+      expect(assetIndexesByName.size).toBe(2);
+      expect(assetIndexesByName.get('ix_member_page_assets_page')).toMatch(
+        /\(member_page_id, status\)$/
+      );
+      expect(assetIndexesByName.get('ix_member_page_assets_pending_expiry')).toMatch(
+        /\(pending_expires_at\) WHERE .*status.*=.*'pending'/
+      );
+    });
+
+    it('enforces V2 document defaults, shallow shape/state rules, and both size backstops', async () => {
+      const { pageId } = await createV2Page(1000, 'v2-doc-constraints');
+      const defaults = await ownerPool.query<{
+        draft_rev: string;
+        draft_updated_at: Date;
+        published_doc: unknown | null;
+        published_at: Date | null;
+        unpublished_at: Date | null;
+        moderation_hold: boolean;
+        moderation_held_at: Date | null;
+        asset_pending_count: number;
+        asset_ready_count: number;
+        asset_alloc_window_started_at: Date | null;
+        asset_alloc_window_count: number;
+      }>(
+        `SELECT
+           draft_rev,
+           draft_updated_at,
+           published_doc,
+           published_at,
+           unpublished_at,
+           moderation_hold,
+           moderation_held_at,
+           asset_pending_count,
+           asset_ready_count,
+           asset_alloc_window_started_at,
+           asset_alloc_window_count
+         FROM public.member_pages
+         WHERE id = $1`,
+        [pageId]
+      );
+      expect(defaults.rows[0]).toMatchObject({
+        draft_rev: '0',
+        published_doc: null,
+        published_at: null,
+        unpublished_at: null,
+        moderation_hold: false,
+        moderation_held_at: null,
+        asset_pending_count: 0,
+        asset_ready_count: 0,
+        asset_alloc_window_started_at: null,
+        asset_alloc_window_count: 0,
+      });
+      expect(defaults.rows[0].draft_updated_at).toBeInstanceOf(Date);
+
+      for (const violation of [
+        {
+          assignment: 'asset_pending_count = -1',
+          constraint: 'ck_member_pages_asset_pending_count',
+        },
+        {
+          assignment: 'asset_pending_count = 6',
+          constraint: 'ck_member_pages_asset_pending_count',
+        },
+        {
+          assignment: 'asset_ready_count = -1',
+          constraint: 'ck_member_pages_asset_ready_count',
+        },
+        {
+          assignment: 'asset_ready_count = 21',
+          constraint: 'ck_member_pages_asset_ready_count',
+        },
+        {
+          assignment: 'asset_alloc_window_count = -1',
+          constraint: 'ck_member_pages_asset_alloc_window_count',
+        },
+        {
+          assignment: 'asset_alloc_window_count = 1, asset_alloc_window_started_at = NULL',
+          constraint: 'ck_member_pages_asset_alloc_window_state',
+        },
+      ]) {
+        await expect(
+          ownerPool.query(
+            `UPDATE public.member_pages SET ${violation.assignment} WHERE id = $1`,
+            [pageId]
+          )
+        ).rejects.toMatchObject({ code: '23514', constraint: violation.constraint });
+      }
+
+      for (const malformed of [
+        [],
+        {},
+        { schemaVersion: '2' },
+        { schemaVersion: 1 },
+      ]) {
+        await expect(
+          ownerPool.query(`UPDATE public.member_pages SET draft_doc = $2::jsonb WHERE id = $1`, [
+            pageId,
+            JSON.stringify(malformed),
+          ])
+        ).rejects.toMatchObject({ code: '23514' });
+      }
+
+      await expect(
+        ownerPool.query(
+          `UPDATE public.member_pages
+           SET published_doc = '[]'::jsonb
+           WHERE id = $1`,
+          [pageId]
+        )
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        ownerPool.query(`UPDATE public.member_pages SET is_published = TRUE WHERE id = $1`, [pageId])
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await ownerPool.query(
+        `UPDATE public.member_pages
+         SET published_doc = draft_doc,
+             is_published = TRUE
+         WHERE id = $1`,
+        [pageId]
+      );
+      await expect(
+        ownerPool.query(`UPDATE public.member_pages SET moderation_hold = TRUE WHERE id = $1`, [
+          pageId,
+        ])
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        ownerPool.query(`UPDATE public.member_pages SET draft_rev = -1 WHERE id = $1`, [pageId])
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        ownerPool.query(
+          `UPDATE public.member_pages
+           SET draft_doc = jsonb_build_object('schemaVersion', 2, 'padding', repeat('x', 524289))
+           WHERE id = $1`,
+          [pageId]
+        )
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        ownerPool.query(
+          `UPDATE public.member_pages
+           SET published_doc = jsonb_build_object('schemaVersion', 2, 'padding', repeat('y', 524289))
+           WHERE id = $1`,
+          [pageId]
+        )
+      ).rejects.toMatchObject({ code: '23514' });
+    }, REAL_DB_MULTI_QUERY_TEST_TIMEOUT_MS);
+
+    it('enforces asset status, ready completeness, ETag, verification, metadata, uniqueness, and FK rules', async () => {
+      const { pageId } = await createV2Page(1010, 'v2-asset-constraints');
+      const pendingExpiry = '2026-12-31T00:00:00.000Z';
+
+      const pending = await ownerPool.query<{ etag: string | null; verified_at: Date | null }>(
+        `INSERT INTO public.member_page_assets (member_page_id, object_key, pending_expires_at)
+         VALUES ($1, 'pending/valid', $2::timestamptz)
+         RETURNING etag, verified_at`,
+        [pageId, pendingExpiry]
+      );
+      expect(pending.rows[0]).toEqual({ etag: null, verified_at: null });
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (member_page_id, object_key, pending_expires_at)
+           VALUES ($1, 'pending/valid', $2::timestamptz)`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({ code: '23505' });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (member_page_id, object_key, pending_expires_at)
+           VALUES ('00000000-0000-4000-8000-000000000099', 'pending/bad-fk', $1::timestamptz)`,
+          [pendingExpiry]
+        )
+      ).rejects.toMatchObject({ code: '23503' });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id, object_key, status, pending_expires_at
+           ) VALUES ($1, 'invalid/status', 'uploaded', $2::timestamptz)`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id, object_key, status, pending_expires_at
+           ) VALUES ($1, 'ready/incomplete', 'ready', $2::timestamptz)`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id, object_key, etag, pending_expires_at
+           ) VALUES ($1, 'pending/etag-only', 'pending-etag', $2::timestamptz)`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'ck_member_page_assets_pending_incomplete',
+      });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id, object_key, verified_at, pending_expires_at
+           ) VALUES ($1, 'pending/verified-only', NOW(), $2::timestamptz)`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'ck_member_page_assets_pending_incomplete',
+      });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id,
+             object_key,
+             status,
+             mime_type,
+             byte_size,
+             width,
+             height,
+             etag,
+             ready_at,
+             verified_at,
+             pending_expires_at
+           ) VALUES (
+             $1, 'pending/masquerade', 'pending', 'image/png', 100, 10, 10,
+             'pending-etag', NOW(), NOW(), $2::timestamptz
+           )`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({ code: '23514' });
+
+      for (const invalid of [
+        { key: 'ready/bad-mime', mime: 'image/gif', size: 100, width: 10, height: 10 },
+        { key: 'ready/zero-size', mime: 'image/png', size: 0, width: 10, height: 10 },
+        { key: 'ready/large-size', mime: 'image/png', size: 5242881, width: 10, height: 10 },
+        { key: 'ready/zero-width', mime: 'image/png', size: 100, width: 0, height: 10 },
+        { key: 'ready/large-height', mime: 'image/png', size: 100, width: 10, height: 4001 },
+      ]) {
+        await expect(
+          ownerPool.query(
+            `INSERT INTO public.member_page_assets (
+               member_page_id,
+               object_key,
+               status,
+               mime_type,
+               byte_size,
+               width,
+               height,
+               etag,
+               ready_at,
+               verified_at,
+               pending_expires_at
+             ) VALUES (
+               $1, $2, 'ready', $3, $4, $5, $6, 'fixture-etag', NOW(), NOW(), $7::timestamptz
+             )`,
+            [
+              pageId,
+              invalid.key,
+              invalid.mime,
+              invalid.size,
+              invalid.width,
+              invalid.height,
+              pendingExpiry,
+            ]
+          )
+        ).rejects.toMatchObject({ code: '23514' });
+      }
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id,
+             object_key,
+             status,
+             mime_type,
+             byte_size,
+             width,
+             height,
+             etag,
+             ready_at,
+             verified_at,
+             pending_expires_at
+           ) VALUES (
+             $1, 'ready/missing-height', 'ready', 'image/webp', 100, 10, NULL,
+             'missing-height-etag', NOW(), NOW(), $2
+           )`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({ code: '23514' });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id,
+             object_key,
+             status,
+             mime_type,
+             byte_size,
+             width,
+             height,
+             ready_at,
+             verified_at,
+             pending_expires_at
+           ) VALUES (
+             $1, 'ready/missing-etag', 'ready', 'image/png', 100, 10, 10, NOW(), NOW(), $2
+           )`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'ck_member_page_assets_ready_complete',
+      });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id,
+             object_key,
+             status,
+             mime_type,
+             byte_size,
+             width,
+             height,
+             etag,
+             ready_at,
+             pending_expires_at
+           ) VALUES (
+             $1, 'ready/missing-verification', 'ready', 'image/png', 100, 10, 10,
+             'missing-verification-etag', NOW(), $2
+           )`,
+          [pageId, pendingExpiry]
+        )
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'ck_member_page_assets_ready_complete',
+      });
+
+      for (const [index, invalidEtag] of [
+        '',
+        'x'.repeat(257),
+        'bad\netag',
+        'bad\u0085etag',
+        'quoted"etag',
+      ].entries()) {
+        await expect(
+          ownerPool.query(
+            `INSERT INTO public.member_page_assets (
+               member_page_id,
+               object_key,
+               status,
+               mime_type,
+               byte_size,
+               width,
+               height,
+               etag,
+               ready_at,
+               verified_at,
+               pending_expires_at
+             ) VALUES (
+               $1, $2, 'ready', 'image/png', 100, 10, 10, $3, NOW(), NOW(), $4
+             )`,
+            [pageId, `ready/bad-etag-${index}`, invalidEtag, pendingExpiry]
+          )
+        ).rejects.toMatchObject({
+          code: '23514',
+          constraint: 'ck_member_page_assets_etag',
+        });
+      }
+
+      const ready = await ownerPool.query<{
+        id: string;
+        etag: string;
+        verified_at: Date;
+        deletion_claimed_at: Date | null;
+      }>(
+        `INSERT INTO public.member_page_assets (
+           member_page_id,
+           object_key,
+           status,
+           mime_type,
+           byte_size,
+           width,
+           height,
+           etag,
+           ready_at,
+           verified_at,
+           pending_expires_at
+         ) VALUES (
+           $1, 'ready/valid', 'ready', 'image/avif', 5242880, 4000, 4000,
+           'valid-etag', NOW(), NOW(), $2
+         )
+         RETURNING id, etag, verified_at, deletion_claimed_at`,
+        [pageId, pendingExpiry]
+      );
+      expect(ready.rows[0].etag).toBe('valid-etag');
+      expect(ready.rows[0].verified_at).toBeInstanceOf(Date);
+      expect(ready.rows[0].deletion_claimed_at).toBeNull();
+
+      const claimed = await ownerPool.query<{ deletion_claimed_at: Date }>(
+        `UPDATE public.member_page_assets
+         SET deletion_claimed_at = NOW()
+         WHERE id = $1
+         RETURNING deletion_claimed_at`,
+        [ready.rows[0].id]
+      );
+      expect(claimed.rows[0].deletion_claimed_at).toBeInstanceOf(Date);
+
+      await expect(
+        ownerPool.query(`DELETE FROM public.member_pages WHERE id = $1`, [pageId])
+      ).rejects.toMatchObject({ code: '23503' });
+    }, REAL_DB_MULTI_QUERY_TEST_TIMEOUT_MS);
+
+    it('grants only the V2 page and asset columns needed by guarded runtime paths', async () => {
+      const privileges = await runtimePool.query<Record<string, boolean>>(`
+        SELECT
+          (
+            has_column_privilege(current_user, 'public.member_pages', 'draft_doc', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'published_doc', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'draft_rev', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'draft_updated_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'published_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'unpublished_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'moderation_hold', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'moderation_held_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'updated_at', 'SELECT')
+          ) AS can_select_page_v2,
+          (
+            has_column_privilege(current_user, 'public.member_pages', 'draft_doc', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'published_doc', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'draft_rev', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'draft_updated_at', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'published_at', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'unpublished_at', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'moderation_hold', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'moderation_held_at', 'UPDATE')
+          ) AS can_update_page_v2,
+          has_column_privilege(current_user, 'public.member_pages', 'draft_doc', 'INSERT') AS can_insert_draft_doc,
+          has_column_privilege(current_user, 'public.member_pages', 'draft_rev', 'INSERT') AS can_insert_draft_rev,
+          has_column_privilege(current_user, 'public.member_pages', 'draft_updated_at', 'INSERT') AS can_insert_draft_updated_at,
+          has_column_privilege(current_user, 'public.member_pages', 'published_doc', 'INSERT') AS can_insert_published_doc,
+          has_column_privilege(current_user, 'public.member_pages', 'published_at', 'INSERT') AS can_insert_published_at,
+          has_column_privilege(current_user, 'public.member_pages', 'unpublished_at', 'INSERT') AS can_insert_unpublished_at,
+          has_column_privilege(current_user, 'public.member_pages', 'moderation_hold', 'INSERT') AS can_insert_moderation_hold,
+          has_column_privilege(current_user, 'public.member_pages', 'moderation_held_at', 'INSERT') AS can_insert_moderation_held_at,
+          (
+            has_column_privilege(current_user, 'public.member_pages', 'asset_pending_count', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'asset_ready_count', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'asset_alloc_window_started_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_pages', 'asset_alloc_window_count', 'SELECT')
+          ) AS can_select_asset_counters,
+          (
+            has_column_privilege(current_user, 'public.member_pages', 'asset_pending_count', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'asset_ready_count', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'asset_alloc_window_started_at', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_pages', 'asset_alloc_window_count', 'UPDATE')
+          ) AS can_update_asset_counters,
+          (
+            has_column_privilege(current_user, 'public.member_pages', 'asset_pending_count', 'INSERT')
+            OR has_column_privilege(current_user, 'public.member_pages', 'asset_ready_count', 'INSERT')
+            OR has_column_privilege(current_user, 'public.member_pages', 'asset_alloc_window_started_at', 'INSERT')
+            OR has_column_privilege(current_user, 'public.member_pages', 'asset_alloc_window_count', 'INSERT')
+          ) AS can_insert_asset_counters,
+          (
+            has_column_privilege(current_user, 'public.member_page_assets', 'id', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'member_page_id', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'object_key', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'status', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'mime_type', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'byte_size', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'width', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'height', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'etag', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'created_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'ready_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'verified_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'pending_expires_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'deletion_claimed_at', 'SELECT')
+          ) AS can_select_assets,
+          (
+            has_column_privilege(current_user, 'public.member_page_assets', 'member_page_id', 'INSERT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'object_key', 'INSERT')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'pending_expires_at', 'INSERT')
+          ) AS can_insert_pending_asset,
+          has_column_privilege(current_user, 'public.member_page_assets', 'status', 'INSERT') AS can_insert_asset_status,
+          has_column_privilege(current_user, 'public.member_page_assets', 'etag', 'INSERT') AS can_insert_asset_etag,
+          has_column_privilege(current_user, 'public.member_page_assets', 'verified_at', 'INSERT') AS can_insert_asset_verified_at,
+          has_column_privilege(current_user, 'public.member_page_assets', 'id', 'INSERT') AS can_insert_asset_id,
+          (
+            has_column_privilege(current_user, 'public.member_page_assets', 'status', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'mime_type', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'byte_size', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'width', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'height', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'etag', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'ready_at', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'verified_at', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_assets', 'deletion_claimed_at', 'UPDATE')
+          ) AS can_update_asset_lifecycle,
+          has_column_privilege(current_user, 'public.member_page_assets', 'object_key', 'UPDATE') AS can_update_object_key,
+          has_column_privilege(current_user, 'public.member_page_assets', 'member_page_id', 'UPDATE') AS can_update_asset_page,
+          has_column_privilege(current_user, 'public.member_page_assets', 'pending_expires_at', 'UPDATE') AS can_update_pending_expiry,
+          has_table_privilege(current_user, 'public.member_page_assets', 'DELETE') AS can_delete_assets,
+          has_table_privilege(current_user, 'public.member_page_assets', 'TRUNCATE') AS can_truncate_assets,
+          (
+            has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'member_page_id', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'action', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'window_started_at', 'SELECT')
+            AND has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'attempt_count', 'SELECT')
+          ) AS can_select_mutation_limits,
+          (
+            has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'member_page_id', 'INSERT')
+            AND has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'action', 'INSERT')
+            AND has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'window_started_at', 'INSERT')
+            AND has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'attempt_count', 'INSERT')
+          ) AS can_insert_mutation_limits,
+          (
+            has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'window_started_at', 'UPDATE')
+            AND has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'attempt_count', 'UPDATE')
+          ) AS can_update_mutation_window,
+          (
+            has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'member_page_id', 'UPDATE')
+            OR has_column_privilege(current_user, 'public.member_page_mutation_rate_limits', 'action', 'UPDATE')
+            OR has_table_privilege(current_user, 'public.member_page_mutation_rate_limits', 'DELETE')
+            OR has_table_privilege(current_user, 'public.member_page_mutation_rate_limits', 'TRUNCATE')
+          ) AS can_mutate_limit_identity_or_delete
+      `);
+      expect(privileges.rows[0]).toEqual({
+        can_select_page_v2: true,
+        can_update_page_v2: true,
+        can_insert_draft_doc: true,
+        can_insert_draft_rev: false,
+        can_insert_draft_updated_at: false,
+        can_insert_published_doc: true,
+        can_insert_published_at: true,
+        can_insert_unpublished_at: false,
+        can_insert_moderation_hold: false,
+        can_insert_moderation_held_at: false,
+        can_select_asset_counters: true,
+        can_update_asset_counters: true,
+        can_insert_asset_counters: false,
+        can_select_assets: true,
+        can_insert_pending_asset: true,
+        can_insert_asset_status: false,
+        can_insert_asset_etag: false,
+        can_insert_asset_verified_at: false,
+        can_insert_asset_id: false,
+        can_update_asset_lifecycle: true,
+        can_update_object_key: false,
+        can_update_asset_page: false,
+        can_update_pending_expiry: false,
+        can_delete_assets: true,
+        can_truncate_assets: false,
+        can_select_mutation_limits: true,
+        can_insert_mutation_limits: true,
+        can_update_mutation_window: true,
+        can_mutate_limit_identity_or_delete: false,
+      });
+
+      const { pageId } = await createV2Page(1020, 'v2-runtime-assets');
+      const pending = await runtimePool.query<{
+        id: string;
+        object_key: string;
+        status: string;
+        etag: string | null;
+        verified_at: Date | null;
+      }>(
+        `INSERT INTO public.member_page_assets (
+           member_page_id, object_key, pending_expires_at
+         ) VALUES ($1, 'runtime/pending', NOW() + INTERVAL '15 minutes')
+         RETURNING id, object_key, status, etag, verified_at`,
+        [pageId]
+      );
+      expect(pending.rows[0]).toMatchObject({
+        object_key: 'runtime/pending',
+        status: 'pending',
+        etag: null,
+        verified_at: null,
+      });
+
+      await expect(
+        runtimePool.query(
+          `INSERT INTO public.member_page_assets (
+             member_page_id,
+             object_key,
+             status,
+             mime_type,
+             byte_size,
+             width,
+             height,
+             etag,
+             ready_at,
+             verified_at,
+             pending_expires_at
+           ) VALUES (
+             $1, 'runtime/forbidden-ready', 'ready', 'image/png', 1024, 100, 100,
+             'forbidden-etag', NOW(), NOW(), NOW() + INTERVAL '15 minutes'
+           )`,
+          [pageId]
+        )
+      ).rejects.toMatchObject({ code: '42501' });
+
+      await expect(
+        runtimePool.query(`UPDATE public.member_page_assets SET object_key = 'changed' WHERE id = $1`, [
+          pending.rows[0].id,
+        ])
+      ).rejects.toMatchObject({ code: '42501' });
+
+      const ready = await runtimePool.query<{
+        status: string;
+        etag: string;
+        verified_at: Date;
+        deletion_claimed_at: Date | null;
+      }>(
+        `UPDATE public.member_page_assets
+         SET status = 'ready',
+             mime_type = 'image/jpeg',
+             byte_size = 1024,
+             width = 100,
+             height = 100,
+             etag = 'runtime-etag',
+             ready_at = NOW(),
+             verified_at = NOW()
+         WHERE id = $1
+         RETURNING status, etag, verified_at, deletion_claimed_at`,
+        [pending.rows[0].id]
+      );
+      expect(ready.rows[0]).toMatchObject({
+        status: 'ready',
+        etag: 'runtime-etag',
+        deletion_claimed_at: null,
+      });
+      expect(ready.rows[0].verified_at).toBeInstanceOf(Date);
+
+      const claimed = await runtimePool.query<{ deletion_claimed_at: Date }>(
+        `UPDATE public.member_page_assets
+         SET deletion_claimed_at = NOW()
+         WHERE id = $1
+         RETURNING deletion_claimed_at`,
+        [pending.rows[0].id]
+      );
+      expect(claimed.rows[0].deletion_claimed_at).toBeInstanceOf(Date);
+
+      const deleted = await runtimePool.query(`DELETE FROM public.member_page_assets WHERE id = $1`, [
+        pending.rows[0].id,
+      ]);
+      expect(deleted.rowCount).toBe(1);
+    });
+
+    it('durably bounds owner publish retries and resets the fixed window', async () => {
+      const { ownerId, pageId } = await createV2Page(1040, 'publish-rate-limit');
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const allowed = await runtimePool.query(V2_PUBLISH_DRAFT_SQL, [
+          'publish-rate-limit',
+          ownerId,
+        ]);
+        expect(allowed.rowCount).toBe(1);
+      }
+      const limited = await runtimePool.query(V2_PUBLISH_DRAFT_SQL, [
+        'publish-rate-limit',
+        ownerId,
+      ]);
+      expect(limited.rows).toEqual([expect.objectContaining({ outcome: 'rate-limit' })]);
+
+      const stored = await ownerPool.query<{
+        action: string;
+        attempt_count: number;
+      }>(
+        `SELECT action, attempt_count
+         FROM public.member_page_mutation_rate_limits
+         WHERE member_page_id = $1`,
+        [pageId]
+      );
+      expect(stored.rows).toEqual([{ action: 'publish', attempt_count: 10 }]);
+
+      await ownerPool.query(
+        `UPDATE public.member_page_mutation_rate_limits
+         SET window_started_at = NOW() - INTERVAL '6 minutes'
+         WHERE member_page_id = $1 AND action = 'publish'`,
+        [pageId]
+      );
+      const reset = await runtimePool.query(V2_PUBLISH_DRAFT_SQL, [
+        'publish-rate-limit',
+        ownerId,
+      ]);
+      expect(reset.rowCount).toBe(1);
+      const resetCount = await ownerPool.query<{ attempt_count: number }>(
+        `SELECT attempt_count
+         FROM public.member_page_mutation_rate_limits
+         WHERE member_page_id = $1 AND action = 'publish'`,
+        [pageId]
+      );
+      expect(resetCount.rows).toEqual([{ attempt_count: 1 }]);
+    });
+
+    it('durably bounds finalize verification without charging unknown asset IDs', async () => {
+      const { ownerId, pageId } = await createV2Page(1045, 'finalize-rate-limit');
+      const [pendingId] = await insertPendingAssetFixtures(
+        pageId,
+        1,
+        'finalize-rate-limit-pending'
+      );
+
+      const missing = await runtimePool.query(ASSET_FINALIZE_GUARD_SQL, [
+        '00000000-0000-4000-8000-000000000001',
+        'finalize-rate-limit',
+        ownerId,
+      ]);
+      expect(missing.rows).toEqual([]);
+
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const allowed = await runtimePool.query(ASSET_FINALIZE_GUARD_SQL, [
+          pendingId,
+          'finalize-rate-limit',
+          ownerId,
+        ]);
+        expect(allowed.rows).toEqual([
+          expect.objectContaining({ outcome: 'success', id: pendingId }),
+        ]);
+      }
+      const limited = await runtimePool.query(ASSET_FINALIZE_GUARD_SQL, [
+        pendingId,
+        'finalize-rate-limit',
+        ownerId,
+      ]);
+      expect(limited.rows).toEqual([
+        expect.objectContaining({ outcome: 'rate-limit', id: pendingId }),
+      ]);
+
+      const stored = await ownerPool.query<{
+        action: string;
+        attempt_count: number;
+      }>(
+        `SELECT action, attempt_count
+         FROM public.member_page_mutation_rate_limits
+         WHERE member_page_id = $1`,
+        [pageId]
+      );
+      expect(stored.rows).toEqual([{ action: 'asset-finalize', attempt_count: 20 }]);
+    });
+
+    it('admits exactly one concurrent allocation when the pending counter starts at four', async () => {
+      const { ownerId, pageId } = await createV2Page(1050, 'counter-pending-race');
+      await insertPendingAssetFixtures(pageId, 4, 'counter-pending-seed');
+      await setAssetCounterState({ pageId, pending: 4, ready: 0 });
+      await expectNoAssetCounterMismatches();
+
+      const clientA = await runtimePool.connect();
+      const clientB = await runtimePool.connect();
+      const presignedExpiresAt = new Date(Date.now() + 5 * 60_000);
+      try {
+        const results = await Promise.all([
+          clientA.query<{ outcome: string }>(ASSET_ALLOCATION_SQL, [
+            'counter-pending-race',
+            ownerId,
+            'counter-pending-race-a',
+            presignedExpiresAt,
+          ]),
+          clientB.query<{ outcome: string }>(ASSET_ALLOCATION_SQL, [
+            'counter-pending-race',
+            ownerId,
+            'counter-pending-race-b',
+            presignedExpiresAt,
+          ]),
+        ]);
+        expect(results.flatMap(({ rows }) => rows).filter(({ outcome }) => outcome === 'success')).toHaveLength(
+          1
+        );
+      } finally {
+        clientA.release();
+        clientB.release();
+      }
+
+      const state = await runtimePool.query<{
+        asset_pending_count: number;
+        asset_alloc_window_count: number;
+      }>(
+        `SELECT asset_pending_count, asset_alloc_window_count
+         FROM public.member_pages
+         WHERE id = $1`,
+        [pageId]
+      );
+      expect(state.rows[0]).toEqual({
+        asset_pending_count: 5,
+        asset_alloc_window_count: 1,
+      });
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('admits exactly one concurrent allocation at fixed-window count nineteen', async () => {
+      const { ownerId, pageId } = await createV2Page(1060, 'counter-window-race');
+      await setAssetCounterState({
+        pageId,
+        pending: 0,
+        ready: 0,
+        windowStartedAt: new Date(),
+        windowCount: 19,
+      });
+
+      const clientA = await runtimePool.connect();
+      const clientB = await runtimePool.connect();
+      const presignedExpiresAt = new Date(Date.now() + 5 * 60_000);
+      try {
+        const results = await Promise.all([
+          clientA.query<{ outcome: string }>(ASSET_ALLOCATION_SQL, [
+            'counter-window-race',
+            ownerId,
+            'counter-window-race-a',
+            presignedExpiresAt,
+          ]),
+          clientB.query<{ outcome: string }>(ASSET_ALLOCATION_SQL, [
+            'counter-window-race',
+            ownerId,
+            'counter-window-race-b',
+            presignedExpiresAt,
+          ]),
+        ]);
+        expect(results.flatMap(({ rows }) => rows).filter(({ outcome }) => outcome === 'success')).toHaveLength(
+          1
+        );
+      } finally {
+        clientA.release();
+        clientB.release();
+      }
+
+      const state = await runtimePool.query<{
+        asset_pending_count: number;
+        asset_alloc_window_count: number;
+      }>(
+        `SELECT asset_pending_count, asset_alloc_window_count
+         FROM public.member_pages
+         WHERE id = $1`,
+        [pageId]
+      );
+      expect(state.rows[0]).toEqual({
+        asset_pending_count: 1,
+        asset_alloc_window_count: 20,
+      });
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('returns quota from the finalize WHERE guard without flipping the pending asset', async () => {
+      const { ownerId, pageId } = await createV2Page(1065, 'counter-finalize-guard');
+      await insertReadyAssetFixtures(pageId, 20, 'counter-finalize-guard-ready');
+      const [pendingId] = await insertPendingAssetFixtures(
+        pageId,
+        1,
+        'counter-finalize-guard-pending'
+      );
+      await setAssetCounterState({ pageId, pending: 1, ready: 20 });
+      await expectNoAssetCounterMismatches();
+
+      const result = await runtimePool.query<{ outcome: string }>(ASSET_FINALIZE_SQL, [
+        pendingId,
+        'counter-finalize-guard',
+        ownerId,
+        'image/png',
+        1024,
+        100,
+        100,
+        'counter-finalize-guard',
+        new Date(),
+      ]);
+      expect(result.rows).toEqual([{
+        outcome: 'quota',
+        asset_id: null,
+        mime_type: null,
+        width: null,
+        height: null,
+        ready_at: null,
+        verified_at: null,
+      }]);
+
+      const state = await runtimePool.query<{
+        status: string;
+        asset_pending_count: number;
+        asset_ready_count: number;
+      }>(
+        `SELECT asset.status, page.asset_pending_count, page.asset_ready_count
+         FROM public.member_page_assets asset
+         JOIN public.member_pages page ON page.id = asset.member_page_id
+         WHERE asset.id = $1`,
+        [pendingId]
+      );
+      expect(state.rows[0]).toEqual({
+        status: 'pending',
+        asset_pending_count: 1,
+        asset_ready_count: 20,
+      });
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('serializes competing finalizations at the ready-asset quota', async () => {
+      const { ownerId, pageId } = await createV2Page(1070, 'counter-finalize-race');
+      await insertReadyAssetFixtures(pageId, 19, 'counter-finalize-ready');
+      const pendingIds = await insertPendingAssetFixtures(pageId, 2, 'counter-finalize-pending');
+      await setAssetCounterState({ pageId, pending: 2, ready: 19 });
+      await expectNoAssetCounterMismatches();
+
+      const blocker = await runtimePool.connect();
+      const clientA = await runtimePool.connect();
+      const clientB = await runtimePool.connect();
+      let blockerInTransaction = false;
+      try {
+        await blocker.query('BEGIN');
+        blockerInTransaction = true;
+        await blocker.query(`SELECT id FROM public.member_pages WHERE id = $1 FOR UPDATE`, [pageId]);
+        const backendPids = await Promise.all([
+          clientA.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'),
+          clientB.query<{ pid: number }>('SELECT pg_backend_pid() AS pid'),
+        ]);
+        const pids = backendPids.map(({ rows }) => rows[0].pid);
+
+        const finalizations = [
+          clientA.query(ASSET_FINALIZE_SQL, [
+            pendingIds[0],
+            'counter-finalize-race',
+            ownerId,
+            'image/png',
+            1024,
+            100,
+            100,
+            'counter-finalize-a',
+            new Date(),
+          ]),
+          clientB.query(ASSET_FINALIZE_SQL, [
+            pendingIds[1],
+            'counter-finalize-race',
+            ownerId,
+            'image/png',
+            1024,
+            100,
+            100,
+            'counter-finalize-b',
+            new Date(),
+          ]),
+        ];
+
+        let waitingCount = 0;
+        for (let attempt = 0; attempt < 100 && waitingCount < 2; attempt += 1) {
+          const waiting = await ownerPool.query<{ waiting_count: number }>(
+            `SELECT COUNT(DISTINCT pid)::integer AS waiting_count
+             FROM pg_locks
+             WHERE pid = ANY($1::integer[])
+               AND granted = FALSE`,
+            [pids]
+          );
+          waitingCount = waiting.rows[0].waiting_count;
+          if (waitingCount < 2) await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(waitingCount).toBe(2);
+
+        await blocker.query('COMMIT');
+        blockerInTransaction = false;
+        const results = await Promise.allSettled(finalizations);
+        expect(results.every(({ status }) => status === 'fulfilled')).toBe(true);
+        const outcomes = results.flatMap((result) =>
+          result.status === 'fulfilled'
+            ? result.value.rows.map((row) => row.outcome)
+            : []
+        );
+        expect(outcomes.sort()).toEqual(['quota', 'success']);
+      } finally {
+        if (blockerInTransaction) await blocker.query('ROLLBACK').catch(() => {});
+        blocker.release();
+        clientA.release();
+        clientB.release();
+      }
+
+      const statuses = await runtimePool.query<{ status: string }>(
+        `SELECT status
+         FROM public.member_page_assets
+         WHERE id = ANY($1::uuid[])
+         ORDER BY status`,
+        [pendingIds]
+      );
+      expect(statuses.rows).toEqual([{ status: 'pending' }, { status: 'ready' }]);
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('keeps counters exact when the same pending asset is finalized twice concurrently', async () => {
+      const { ownerId, pageId } = await createV2Page(1080, 'counter-double-finalize');
+      const [assetId] = await insertPendingAssetFixtures(pageId, 1, 'counter-double-finalize');
+      await setAssetCounterState({ pageId, pending: 1, ready: 0 });
+
+      const params = [
+        assetId,
+        'counter-double-finalize',
+        ownerId,
+        'image/png',
+        1024,
+        100,
+        100,
+        'counter-double-finalize',
+        new Date(),
+      ];
+      const clientA = await runtimePool.connect();
+      const clientB = await runtimePool.connect();
+      try {
+        const results = await Promise.all([
+          clientA.query(ASSET_FINALIZE_SQL, params),
+          clientB.query(ASSET_FINALIZE_SQL, params),
+        ]);
+        expect(results.map(({ rowCount }) => rowCount).sort()).toEqual([0, 1]);
+      } finally {
+        clientA.release();
+        clientB.release();
+      }
+
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('retains ready quota through claims and simulated R2 failure, then decrements on cleanup', async () => {
+      const { ownerId, pageId } = await createV2Page(1090, 'counter-claim-retry');
+      const [pendingId] = await insertPendingAssetFixtures(pageId, 1, 'counter-claim-pending');
+      const [readyId] = await insertReadyAssetFixtures(pageId, 1, 'counter-claim-ready');
+      await setAssetCounterState({ pageId, pending: 1, ready: 1 });
+
+      const firstClaims = await Promise.all([
+        runtimePool.query<{ outcome: string; newly_claimed: boolean }>(ASSET_DELETE_CLAIM_SQL, [
+          pendingId,
+          'counter-claim-retry',
+          ownerId,
+        ]),
+        runtimePool.query<{ outcome: string; newly_claimed: boolean }>(ASSET_DELETE_CLAIM_SQL, [
+          readyId,
+          'counter-claim-retry',
+          ownerId,
+        ]),
+      ]);
+      expect(firstClaims.map(({ rows }) => rows[0])).toEqual([
+        expect.objectContaining({ outcome: 'success', newly_claimed: true }),
+        expect.objectContaining({ outcome: 'success', newly_claimed: true }),
+      ]);
+      const claimedState = await runtimePool.query<{
+        asset_pending_count: number;
+        asset_ready_count: number;
+        claimed_ready_count: number;
+      }>(
+        `SELECT
+           page.asset_pending_count,
+           page.asset_ready_count,
+           COUNT(asset.id) FILTER (
+             WHERE asset.status = 'ready' AND asset.deletion_claimed_at IS NOT NULL
+           )::integer AS claimed_ready_count
+         FROM public.member_pages page
+         LEFT JOIN public.member_page_assets asset ON asset.member_page_id = page.id
+         WHERE page.id = $1
+         GROUP BY page.id`,
+        [pageId]
+      );
+      expect(claimedState.rows[0]).toEqual({
+        asset_pending_count: 0,
+        asset_ready_count: 1,
+        claimed_ready_count: 1,
+      });
+      await expectNoAssetCounterMismatches();
+
+      // A failed R2 delete performs no metadata statement. The claimed retry is
+      // idempotent and the stored ready row must continue consuming quota.
+      const retry = await runtimePool.query<{ outcome: string; newly_claimed: boolean }>(
+        ASSET_DELETE_CLAIM_SQL,
+        [readyId, 'counter-claim-retry', ownerId]
+      );
+      expect(retry.rows[0]).toMatchObject({ outcome: 'success', newly_claimed: false });
+      const retainedQuota = await runtimePool.query<{ asset_ready_count: number }>(
+        `SELECT asset_ready_count FROM public.member_pages WHERE id = $1`,
+        [pageId]
+      );
+      expect(retainedQuota.rows[0].asset_ready_count).toBe(1);
+      await expectNoAssetCounterMismatches();
+
+      const beforeExpiry = await runtimePool.query<{ id: string; status: string }>(
+        ASSET_DELETE_METADATA_SQL,
+        [readyId, 'counter-claim-ready-1', 'counter-claim-ready-1']
+      );
+      expect(beforeExpiry.rows).toEqual([]);
+      const retainedClaims = await runtimePool.query<{ id: string; object_key: string }>(
+        `SELECT id, object_key
+         FROM public.member_page_assets
+         WHERE id = ANY($1::uuid[])
+         ORDER BY id`,
+        [[pendingId, readyId]]
+      );
+      expect(retainedClaims.rows).toHaveLength(2);
+      expect(retainedClaims.rows.map(({ object_key }) => object_key).sort()).toEqual([
+        'counter-claim-pending-1',
+        'counter-claim-ready-1',
+      ]);
+      await ownerPool.query(
+        `UPDATE public.member_page_assets
+         SET pending_expires_at = NOW() - INTERVAL '1 second'
+         WHERE id = ANY($1::uuid[])`,
+        [[pendingId, readyId]]
+      );
+
+      const deletedReady = await runtimePool.query<{ id: string; status: string }>(
+        ASSET_DELETE_METADATA_SQL,
+        [readyId, 'counter-claim-ready-1', 'counter-claim-ready-1']
+      );
+      expect(deletedReady.rows).toEqual([{ id: readyId, status: 'ready' }]);
+      const deletedPending = await runtimePool.query<{ id: string; status: string }>(
+        ASSET_DELETE_METADATA_SQL,
+        [pendingId, 'counter-claim-pending-1', null]
+      );
+      expect(deletedPending.rows).toEqual([{ id: pendingId, status: 'pending' }]);
+
+      const cleanedState = await runtimePool.query<{
+        asset_pending_count: number;
+        asset_ready_count: number;
+        asset_rows: number;
+      }>(
+        `SELECT
+           page.asset_pending_count,
+           page.asset_ready_count,
+           COUNT(asset.id)::integer AS asset_rows
+         FROM public.member_pages page
+         LEFT JOIN public.member_page_assets asset ON asset.member_page_id = page.id
+         WHERE page.id = $1
+         GROUP BY page.id`,
+        [pageId]
+      );
+      expect(cleanedState.rows[0]).toEqual({
+        asset_pending_count: 0,
+        asset_ready_count: 0,
+        asset_rows: 0,
+      });
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('authorizes exact moderation update and returning metadata as runtime', async () => {
+      const page = await createV2Page(1095, 'runtime-moderation', 'Runtime Moderation');
+      await runtimePool.query(BRIDGE_SET_PUBLICATION_SQL, [page.pageId, true]);
+
+      const held = await runtimePool.query<{
+        slug: string;
+        is_published: boolean;
+        moderation_hold: boolean;
+        unpublished_at: Date;
+        moderation_held_at: Date;
+        updated_at: Date;
+      }>(
+        `UPDATE public.member_pages
+         SET is_published = FALSE,
+             moderation_hold = TRUE,
+             unpublished_at = NOW(),
+             moderation_held_at = NOW(),
+             updated_at = NOW()
+         WHERE slug = $1
+         RETURNING
+           slug,
+           is_published,
+           moderation_hold,
+           unpublished_at,
+           moderation_held_at,
+           updated_at`,
+        ['runtime-moderation']
+      );
+      expect(held.rows[0]).toMatchObject({
+        slug: 'runtime-moderation',
+        is_published: false,
+        moderation_hold: true,
+      });
+      expect(held.rows[0].unpublished_at).toBeInstanceOf(Date);
+      expect(held.rows[0].moderation_held_at).toBeInstanceOf(Date);
+      expect(held.rows[0].updated_at).toBeInstanceOf(Date);
+
+      const cleared = await runtimePool.query<{
+        slug: string;
+        is_published: boolean;
+        moderation_hold: boolean;
+        updated_at: Date;
+      }>(
+        `UPDATE public.member_pages
+         SET is_published = FALSE,
+             moderation_hold = FALSE,
+             updated_at = NOW()
+         WHERE slug = $1
+           AND moderation_hold = TRUE
+         RETURNING slug, is_published, moderation_hold, updated_at`,
+        ['runtime-moderation']
+      );
+      expect(cleared.rows[0]).toMatchObject({
+        slug: 'runtime-moderation',
+        is_published: false,
+        moderation_hold: false,
+      });
+      expect(cleared.rows[0].updated_at).toBeInstanceOf(Date);
+    });
+
+    it('executes bridge publication and V2 autosave/publish/claim SQL as runtime', async () => {
+      const bridge = await createV2Page(1100, 'runtime-bridge-publication', 'Bridge Runtime');
+      const publishedBridge = await runtimePool.query<{ slug: string }>(
+        BRIDGE_SET_PUBLICATION_SQL,
+        [bridge.pageId, true]
+      );
+      expect(publishedBridge.rows).toEqual([{ slug: 'runtime-bridge-publication' }]);
+      const unpublishedBridge = await runtimePool.query<{ slug: string }>(
+        BRIDGE_SET_PUBLICATION_SQL,
+        [bridge.pageId, false]
+      );
+      expect(unpublishedBridge.rows).toEqual([{ slug: 'runtime-bridge-publication' }]);
+
+      const v2 = await createV2Page(1110, 'runtime-v2-statements', 'Runtime V2 Statements');
+      const [assetId] = await insertReadyAssetFixtures(v2.pageId, 1, 'runtime-v2-statements');
+      await setAssetCounterState({ pageId: v2.pageId, pending: 0, ready: 1 });
+      const referencedDocument = documentReferencingAsset(v2.draft, assetId);
+      const assetIdsJson = JSON.stringify([assetId]);
+
+      const autosaved = await runtimePool.query<{ outcome: string; draft_rev: string }>(
+        V2_AUTOSAVE_SQL,
+        [
+          'runtime-v2-statements',
+          v2.ownerId,
+          assetIdsJson,
+          referencedDocument,
+          0,
+          1,
+        ]
+      );
+      expect(autosaved.rows[0]).toMatchObject({ outcome: 'success', draft_rev: '1' });
+
+      const publishDraft = await runtimePool.query<{
+        outcome: string;
+        draft_doc: unknown;
+        draft_rev: string;
+        moderation_hold: boolean;
+      }>(V2_PUBLISH_DRAFT_SQL, ['runtime-v2-statements', v2.ownerId]);
+      expect(publishDraft.rows[0]).toEqual({
+        outcome: 'success',
+        draft_doc: referencedDocument,
+        draft_rev: '1',
+        moderation_hold: false,
+      });
+
+      const publisher = await runtimePool.connect();
+      const claimant = await runtimePool.connect();
+      let publisherInTransaction = false;
+      try {
+        await publisher.query('BEGIN');
+        publisherInTransaction = true;
+        const published = await publisher.query<{ outcome: string }>(V2_PUBLISH_SQL, [
+          'runtime-v2-statements',
+          v2.ownerId,
+          assetIdsJson,
+          referencedDocument,
+          1,
+          1,
+          referencedDocument.frame.displayName,
+          referencedDocument.frame.summary,
+        ]);
+        expect(published.rows[0]).toMatchObject({ outcome: 'success' });
+
+        const claimPromise = claimant.query<{ outcome: string }>(ASSET_DELETE_CLAIM_SQL, [
+          assetId,
+          'runtime-v2-statements',
+          v2.ownerId,
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await publisher.query('COMMIT');
+        publisherInTransaction = false;
+        const claim = await claimPromise;
+        expect(claim.rows[0]).toMatchObject({ outcome: 'referenced' });
+      } finally {
+        if (publisherInTransaction) await publisher.query('ROLLBACK').catch(() => {});
+        publisher.release();
+        claimant.release();
+      }
+
+      const publishedState = await runtimePool.query<{
+        is_published: boolean;
+        draft_doc: unknown;
+        published_doc: unknown;
+      }>(
+        `SELECT is_published, draft_doc, published_doc
+         FROM public.member_pages
+         WHERE id = $1`,
+        [v2.pageId]
+      );
+      expect(publishedState.rows[0]).toEqual({
+        is_published: true,
+        draft_doc: referencedDocument,
+        published_doc: referencedDocument,
+      });
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('serializes deletion claims against concurrent autosave references in both orders', async () => {
+      const autosaveFirst = await createV2Page(1120, 'runtime-autosave-first');
+      const [autosaveFirstAssetId] = await insertReadyAssetFixtures(
+        autosaveFirst.pageId,
+        1,
+        'runtime-autosave-first'
+      );
+      await setAssetCounterState({ pageId: autosaveFirst.pageId, pending: 0, ready: 1 });
+      const autosaveFirstDocument = documentReferencingAsset(
+        autosaveFirst.draft,
+        autosaveFirstAssetId
+      );
+
+      const autosaver = await runtimePool.connect();
+      const blockedClaimant = await runtimePool.connect();
+      let autosaverInTransaction = false;
+      try {
+        await autosaver.query('BEGIN');
+        autosaverInTransaction = true;
+        const autosave = await autosaver.query<{ outcome: string }>(V2_AUTOSAVE_SQL, [
+          'runtime-autosave-first',
+          autosaveFirst.ownerId,
+          JSON.stringify([autosaveFirstAssetId]),
+          autosaveFirstDocument,
+          0,
+          1,
+        ]);
+        expect(autosave.rows[0]).toMatchObject({ outcome: 'success' });
+
+        const claimPromise = blockedClaimant.query<{ outcome: string }>(ASSET_DELETE_CLAIM_SQL, [
+          autosaveFirstAssetId,
+          'runtime-autosave-first',
+          autosaveFirst.ownerId,
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await autosaver.query('COMMIT');
+        autosaverInTransaction = false;
+        const claim = await claimPromise;
+        expect(claim.rows[0]).toMatchObject({ outcome: 'referenced' });
+      } finally {
+        if (autosaverInTransaction) await autosaver.query('ROLLBACK').catch(() => {});
+        autosaver.release();
+        blockedClaimant.release();
+      }
+      await expectNoAssetCounterMismatches();
+
+      const claimFirst = await createV2Page(1130, 'runtime-claim-first');
+      const [claimFirstAssetId] = await insertReadyAssetFixtures(
+        claimFirst.pageId,
+        1,
+        'runtime-claim-first'
+      );
+      await setAssetCounterState({ pageId: claimFirst.pageId, pending: 0, ready: 1 });
+      const claimFirstDocument = documentReferencingAsset(claimFirst.draft, claimFirstAssetId);
+
+      const claimant = await runtimePool.connect();
+      const blockedAutosaver = await runtimePool.connect();
+      let claimantInTransaction = false;
+      try {
+        await claimant.query('BEGIN');
+        claimantInTransaction = true;
+        const claimed = await claimant.query<{ outcome: string; newly_claimed: boolean }>(
+          ASSET_DELETE_CLAIM_SQL,
+          [claimFirstAssetId, 'runtime-claim-first', claimFirst.ownerId]
+        );
+        expect(claimed.rows[0]).toMatchObject({ outcome: 'success', newly_claimed: true });
+
+        const autosavePromise = blockedAutosaver.query<{ outcome: string }>(V2_AUTOSAVE_SQL, [
+          'runtime-claim-first',
+          claimFirst.ownerId,
+          JSON.stringify([claimFirstAssetId]),
+          claimFirstDocument,
+          0,
+          1,
+        ]);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        await claimant.query('COMMIT');
+        claimantInTransaction = false;
+        const autosave = await autosavePromise;
+        expect(autosave.rows[0]).toMatchObject({ outcome: 'invalid', draft_rev: '0' });
+      } finally {
+        if (claimantInTransaction) await claimant.query('ROLLBACK').catch(() => {});
+        claimant.release();
+        blockedAutosaver.release();
+      }
+      await expectNoAssetCounterMismatches();
+    });
+
+    it('republishes a canonical legacy external project with imported artwork', async () => {
+      const bridge = await createV2Page(
+        1140,
+        'runtime-bridge-artwork',
+        'Bridge Artwork'
+      );
+      const [assetId] = await insertReadyAssetFixtures(
+        bridge.pageId,
+        1,
+        'runtime-bridge-artwork'
+      );
+      await setAssetCounterState({ pageId: bridge.pageId, pending: 0, ready: 1 });
+      const showcase = {
+        kind: 'external' as const,
+        name: 'Linkless Project',
+        shortDescription: 'Imported artwork must survive the bridge.',
+        type: 'tool',
+        status: 'released' as const,
+      };
+      const document = legacyToDoc(
+        {
+          displayName: 'Bridge Artwork',
+          blurb: null,
+          websiteUrl: null,
+          socialLinks: {},
+          showcase,
+        },
+        {
+          ids: () => `legacy-featured-${bridge.pageId}`,
+          externalArtworkAssetId: assetId,
+        }
+      );
+      await ownerPool.query(
+        `UPDATE public.member_pages
+         SET showcase = $2::jsonb,
+             draft_doc = $3::jsonb,
+             published_doc = NULL,
+             is_published = FALSE
+         WHERE id = $1`,
+        [bridge.pageId, JSON.stringify(showcase), JSON.stringify(document)]
+      );
+
+      const published = await runtimePool.query<{ published_doc: unknown }>(
+        BRIDGE_SET_PUBLICATION_SQL.replace(
+          'RETURNING slug',
+          'RETURNING published_doc'
+        ),
+        [bridge.pageId, true]
+      );
+
+      expect(published.rows).toEqual([{ published_doc: document }]);
+    });
+
+    it('allows runtime creation of unpublished and immediate legacy-published pages', async () => {
+      const unpublishedActors = await createV2Actors(1030);
+      const unpublishedDraft = makeMinimalMemberV2Document('Runtime Unpublished');
+      const unpublished = await runtimePool.query<{
+        is_published: boolean;
+        draft_doc: unknown;
+        published_doc: unknown | null;
+        published_at: Date | null;
+      }>(
+        `INSERT INTO public.member_pages (
+           owner_account_id,
+           created_by_account_id,
+           slug,
+           display_name,
+           is_published,
+           draft_doc,
+           published_doc,
+           published_at
+         ) VALUES ($1, $2, 'runtime-unpublished', 'Runtime Unpublished', FALSE, $3::jsonb, NULL, NULL)
+         RETURNING is_published, draft_doc, published_doc, published_at`,
+        [
+          unpublishedActors.ownerId,
+          unpublishedActors.adminId,
+          JSON.stringify(unpublishedDraft),
+        ]
+      );
+      expect(unpublished.rows[0]).toEqual({
+        is_published: false,
+        draft_doc: unpublishedDraft,
+        published_doc: null,
+        published_at: null,
+      });
+
+      const publishedActors = await createV2Actors(1040);
+      const publishedDraft = makeMinimalMemberV2Document('Runtime Published');
+      const published = await runtimePool.query<{
+        is_published: boolean;
+        draft_doc: unknown;
+        published_doc: unknown;
+        published_at: Date;
+      }>(
+        `INSERT INTO public.member_pages (
+           owner_account_id,
+           created_by_account_id,
+           slug,
+           display_name,
+           is_published,
+           draft_doc,
+           published_doc,
+           published_at
+         ) VALUES ($1, $2, 'runtime-published', 'Runtime Published', TRUE, $3::jsonb, $3::jsonb, NOW())
+         RETURNING is_published, draft_doc, published_doc, published_at`,
+        [publishedActors.ownerId, publishedActors.adminId, JSON.stringify(publishedDraft)]
+      );
+      expect(published.rows[0]).toMatchObject({
+        is_published: true,
+        draft_doc: publishedDraft,
+        published_doc: publishedDraft,
+      });
+      expect(published.rows[0].published_at).toBeInstanceOf(Date);
     });
   });
 });

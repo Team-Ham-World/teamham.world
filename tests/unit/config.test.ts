@@ -531,6 +531,8 @@ describe('lib/auth/config', () => {
       Object.entries(process.env).filter(
         ([k]) =>
           !k.startsWith('DISCORD_') &&
+          !k.startsWith('MEMBER_PAGE_R2_') &&
+          !k.startsWith('MEMBER_PAGE_V2_') &&
           ![
             'APP_BASE_URL',
             'OAUTH_STATE_HMAC_SECRET',
@@ -543,8 +545,8 @@ describe('lib/auth/config', () => {
 
     it('clean disabled mode succeeds', () => {
       const output = execFileSync(
-        'npx',
-        ['tsx', preflightScript],
+        process.execPath,
+        ['--import', 'tsx', preflightScript],
         {
           cwd: projectRoot,
           env: {
@@ -566,8 +568,8 @@ describe('lib/auth/config', () => {
 
       try {
         execFileSync(
-          'npx',
-          ['tsx', preflightScript],
+          process.execPath,
+          ['--import', 'tsx', preflightScript],
           {
             cwd: projectRoot,
             env: {
@@ -594,8 +596,8 @@ describe('lib/auth/config', () => {
 
     it('valid production runtime-role URL succeeds', () => {
       const output = execFileSync(
-        'npx',
-        ['tsx', preflightScript],
+        process.execPath,
+        ['--import', 'tsx', preflightScript],
         {
           cwd: projectRoot,
           env: {
@@ -618,8 +620,8 @@ describe('lib/auth/config', () => {
 
       try {
         execFileSync(
-          'npx',
-          ['tsx', preflightScript],
+          process.execPath,
+          ['--import', 'tsx', preflightScript],
           {
             cwd: projectRoot,
             env: {
@@ -652,8 +654,8 @@ describe('lib/auth/config', () => {
 
       try {
         execFileSync(
-          'npx',
-          ['tsx', preflightScript],
+          process.execPath,
+          ['--import', 'tsx', preflightScript],
           {
             cwd: projectRoot,
             env: {

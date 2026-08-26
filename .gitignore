@@ -12,6 +12,7 @@
 
 # testing
 /coverage
+/infra/local-s3/data/
 
 # next.js
 /.next/
@@ -23,6 +24,7 @@
 # misc
 .DS_Store
 *.pem
+/.agents/
 
 # debug
 npm-debug.log*

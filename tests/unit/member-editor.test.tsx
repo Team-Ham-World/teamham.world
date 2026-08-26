@@ -77,8 +77,31 @@ describe("member editor showcase fields", () => {
     expect(html).toContain('id="showcaseName"');
     expect(html).toContain('id="showcaseDescription"');
     expect(html).toContain('id="showcaseStatus"');
-    expect(html).toContain('id="showcaseImageUrl"');
-    expect(html).toContain('value="https://patchtray.io/cover.jpg"');
+    expect(html).not.toContain('id="showcaseImageUrl"');
+    expect(html).not.toContain('name="showcaseImageUrl"');
+    expect(html).toContain('src="https://patchtray.io/cover.jpg"');
+    expect(html).toContain("shown read-only");
+    expect(html).toContain("will not create, replace, or import artwork");
+    expect(html).toContain("after this page joins the V2 rollout");
+    expect(html).not.toContain("Open Graph");
+    expect(html).not.toContain("Artwork URL");
+  });
+
+  it("does not offer automatic or URL artwork controls when no remote art exists", () => {
+    const html = renderEditor({
+      kind: "external",
+      name: "PatchTray",
+      shortDescription: "A visual VST3 host.",
+      type: "Tool",
+      status: "released",
+      url: "https://patchtray.io",
+    });
+
+    expect(html).toContain("Artwork cannot be added from this legacy editor.");
+    expect(html).toContain("Uploaded project artwork is managed in the new page editor");
+    expect(html).not.toContain('name="showcaseImageUrl"');
+    expect(html).not.toContain("Open Graph");
+    expect(html).not.toContain("Artwork URL");
   });
 
   it("shows no project fields when the showcase is disabled", () => {

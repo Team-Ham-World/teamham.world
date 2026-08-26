@@ -115,6 +115,53 @@ describe("member model and validation", () => {
     }
   });
 
+  it("canonicalizes every legacy-authored string before bridge conversion", () => {
+    expect(validateMemberContent({
+      displayName: "\u00a0Cafe\u0301 HAM\ufeff",
+      blurb: "\u2007Makes cafe\u0301 tools.\u205f",
+      websiteUrl: "\u3000https://example.com/cafe\u0301\u202f",
+      socialLinks: { x: "\u1680https://x.com/cafe\u0301\u2000" },
+      showcase: {
+        kind: "external",
+        name: "\u00a0Cafe\u0301 project\ufeff",
+        shortDescription: "\u2028Cafe\u0301 description.\u2029",
+        type: "\u200atool\u3000",
+        status: "released",
+        repository: "\u2007https://example.com/cafe\u0301.git\u205f",
+      },
+    })).toEqual({
+      success: true,
+      data: {
+        displayName: "Café HAM",
+        blurb: "Makes café tools.",
+        websiteUrl: "https://example.com/café",
+        socialLinks: { x: "https://x.com/café" },
+        showcase: {
+          kind: "external",
+          name: "Café project",
+          shortDescription: "Café description.",
+          type: "tool",
+          status: "released",
+          repository: "https://example.com/café.git",
+        },
+      },
+    });
+  });
+
+  it("rejects controls and unpaired surrogates at the legacy boundary", () => {
+    for (const blurb of ["line one\nline two", "bad\u0085text", "bad\uD800text"]) {
+      const result = validateMemberContent({
+        displayName: "HAM Friend",
+        blurb,
+        websiteUrl: null,
+        socialLinks: {},
+        showcase: null,
+      });
+      expect(result.success, blurb).toBe(false);
+      if (!result.success) expect(result.errors.blurb).toEqual(expect.any(String));
+    }
+  });
+
   it("strictly parses supported HTTPS social links", () => {
     expect(parseMemberSocialLinks({
       github: "  https://github.com/ham-friend  ",

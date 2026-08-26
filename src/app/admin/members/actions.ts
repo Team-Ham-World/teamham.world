@@ -11,6 +11,10 @@ import {
   reassignMemberPage,
   setMemberPublication,
 } from "@/lib/members/dal";
+import {
+  clearModerationHold,
+  takeDownAndHold,
+} from "@/lib/members/v2/moderation";
 import type { MemberFieldErrors } from "@/lib/members/validation";
 import { memberPath } from "@/lib/site";
 
@@ -46,6 +50,11 @@ function refreshMemberSurfaces(slug?: string) {
   revalidatePath("/members");
   revalidatePath("/api/members");
   if (slug) revalidatePath(memberPath(slug));
+}
+
+function refreshModerationState(slug: string) {
+  revalidatePath("/admin/members");
+  revalidatePath(memberPath(slug));
 }
 
 export async function createMemberPageAction(
@@ -91,6 +100,18 @@ export async function manageMemberPageAction(
         formData.get("ownerAccountId"),
       );
       message = `Reassigned /m/${slug}.`;
+    } else if (operation === "take-down-and-hold") {
+      const result = await takeDownAndHold(formData.get("slug"));
+      slug = result.slug;
+      message = `Took down /m/${slug} and placed it on moderation hold.`;
+      refreshMemberSurfaces(slug);
+      return { status: "success", message, fieldErrors: {} };
+    } else if (operation === "clear-hold") {
+      const result = await clearModerationHold(formData.get("slug"));
+      slug = result.slug;
+      message = `Cleared the moderation hold for /m/${slug}. The page remains unpublished.`;
+      refreshModerationState(slug);
+      return { status: "success", message, fieldErrors: {} };
     } else {
       throw new MemberMutationError("invalid", "Choose a valid page action.");
     }

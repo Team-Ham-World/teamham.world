@@ -26,6 +26,7 @@ const PROJECT_STATUSES: ReadonlySet<ProjectStatus> = new Set([
   "paused",
   "retired",
 ]);
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
 
 export type MemberField =
   | "slug"
@@ -59,10 +60,31 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]) {
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
+function countCharacters(value: string): number {
+  return [...value].length;
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function optionalTrimmedString(value: unknown): string | null | undefined {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
+  if (CONTROL_CHARACTERS.test(value) || hasUnpairedSurrogate(value)) {
+    return undefined;
+  }
+  const trimmed = value.normalize("NFC").trim();
   return trimmed === "" ? null : trimmed;
 }
 
@@ -83,7 +105,9 @@ function parseOptionalHttpsUrl(
 ): string | null | undefined {
   const normalized = optionalTrimmedString(value);
   if (normalized === null || normalized === undefined) return normalized;
-  if (normalized.length > maximum || !isHttpsUrl(normalized)) return undefined;
+  if (countCharacters(normalized) > maximum || !isHttpsUrl(normalized)) {
+    return undefined;
+  }
   return normalized;
 }
 
@@ -144,11 +168,11 @@ export function parseMemberShowcase(value: unknown): MemberShowcase | null {
 
   if (
     !name ||
-    name.length > MEMBER_LIMITS.showcaseName ||
+    countCharacters(name) > MEMBER_LIMITS.showcaseName ||
     !shortDescription ||
-    shortDescription.length > MEMBER_LIMITS.showcaseDescription ||
+    countCharacters(shortDescription) > MEMBER_LIMITS.showcaseDescription ||
     !type ||
-    type.length > MEMBER_LIMITS.showcaseType ||
+    countCharacters(type) > MEMBER_LIMITS.showcaseType ||
     typeof status !== "string" ||
     !PROJECT_STATUSES.has(status as ProjectStatus) ||
     url === undefined ||
@@ -174,8 +198,8 @@ export function validateMemberContent(
   input: Record<string, unknown>,
 ): ValidationResult<MemberContentInput> {
   const errors: MemberFieldErrors = {};
-  const displayName =
-    typeof input.displayName === "string" ? input.displayName.trim() : "";
+  const parsedDisplayName = optionalTrimmedString(input.displayName);
+  const displayName = parsedDisplayName ?? "";
   const blurb = optionalTrimmedString(input.blurb);
   const websiteUrl = parseOptionalHttpsUrl(
     input.websiteUrl,
@@ -185,11 +209,14 @@ export function validateMemberContent(
 
   if (!displayName) {
     errors.displayName = "Enter a display name.";
-  } else if (displayName.length > MEMBER_LIMITS.displayName) {
+  } else if (countCharacters(displayName) > MEMBER_LIMITS.displayName) {
     errors.displayName = `Use ${MEMBER_LIMITS.displayName} characters or fewer.`;
   }
 
-  if (blurb === undefined || (blurb && blurb.length > MEMBER_LIMITS.blurb)) {
+  if (
+    blurb === undefined ||
+    (blurb && countCharacters(blurb) > MEMBER_LIMITS.blurb)
+  ) {
     errors.blurb = `Use ${MEMBER_LIMITS.blurb} characters or fewer.`;
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
 import {
   createMemberPageAction,
@@ -40,7 +40,9 @@ export function AdminMemberCreateForm({ accounts }: { accounts: AdminAccountOpti
           {accounts.map((account) => (
             <option key={account.id} value={account.id} disabled={account.hasPage}>
               {account.username ? `@${account.username}` : `Member ${account.id.slice(0, 8)}`}
-              {account.hasPage ? " — already has a page" : ""}
+              {account.assignedPageSlug
+                ? ` — owns /m/${account.assignedPageSlug}`
+                : ""}
             </option>
           ))}
         </select>
@@ -54,16 +56,10 @@ export function AdminMemberCreateForm({ accounts }: { accounts: AdminAccountOpti
         </div>
         {state.fieldErrors.slug ? <p className="mt-2 text-sm font-bold text-decorative-red">{state.fieldErrors.slug}</p> : null}
       </div>
-      <div>
+      <div className="lg:col-span-2">
         <label htmlFor="displayName" className="font-bold">Display name</label>
         <input id="displayName" name="displayName" required maxLength={MEMBER_LIMITS.displayName} className={INPUT_CLASS} />
         {state.fieldErrors.displayName ? <p className="mt-2 text-sm font-bold text-decorative-red">{state.fieldErrors.displayName}</p> : null}
-      </div>
-      <div className="flex items-end">
-        <label className="flex min-h-11 items-center gap-3 border-2 border-ink bg-surface px-4 py-2 font-bold">
-          <input name="isPublished" type="checkbox" className="h-5 w-5 accent-[var(--color-interactive-blue)]" />
-          Publish immediately
-        </label>
       </div>
       <div className="flex flex-wrap items-center gap-4 lg:col-span-2">
         <FormSubmitButton className={BUTTON_CLASS} pendingLabel="Creating…">Create page</FormSubmitButton>
@@ -81,37 +77,143 @@ export function AdminMemberRowControls({
   accounts: AdminAccountOption[];
 }) {
   const [state, action] = useActionState(manageMemberPageAction, INITIAL_STATE);
+  const [isReassigning, setIsReassigning] = useState(false);
+  const reassignPanelId = `reassign-owner-${page.id}`;
+  const reassignToggle = (
+    <button
+      type="button"
+      className={BUTTON_CLASS}
+      aria-controls={reassignPanelId}
+      aria-expanded={isReassigning}
+      onClick={() => setIsReassigning((visible) => !visible)}
+    >
+      {isReassigning ? "Cancel reassign" : "Reassign"}
+    </button>
+  );
+
   return (
     <div className="mt-5 border-t border-muted/40 pt-5">
-      <form action={action} className="flex flex-wrap items-end gap-3">
-        <input type="hidden" name="pageId" value={page.id} />
-        <input type="hidden" name="operation" value={page.isPublished ? "unpublish" : "publish"} />
-        <FormSubmitButton className={BUTTON_CLASS} pendingLabel="Updating…">
-          {page.isPublished ? "Unpublish" : "Publish"}
-        </FormSubmitButton>
-      </form>
+      {/* Moderation: Take down and hold / Clear hold */}
+      {page.moderationHold ? (
+        <div className="border-2 border-ink bg-surface p-4">
+          <p className="text-sm font-bold text-ink">
+            Moderation hold active
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-muted">
+            The owner can continue editing, uploading, and resetting their draft,
+            but cannot publish while the hold is active. Clearing the hold leaves
+            the page unpublished.
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <form action={action}>
+              <input type="hidden" name="slug" value={page.slug} />
+              <input type="hidden" name="operation" value="clear-hold" />
+              <FormSubmitButton className={BUTTON_CLASS} pendingLabel="Clearing…">
+                Clear hold
+              </FormSubmitButton>
+            </form>
+            {reassignToggle}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <form
+            action={action}
+            onSubmit={(event) => {
+              const confirmed = window.confirm(
+                `Take down /m/${page.slug} and place it on moderation hold?\n\nThis will immediately remove the page from public view. The owner can continue editing their draft but cannot publish while the hold is active.`
+              );
+              if (!confirmed) {
+                event.preventDefault();
+              }
+            }}
+          >
+            <input type="hidden" name="slug" value={page.slug} />
+            <input type="hidden" name="operation" value="take-down-and-hold" />
+            <FormSubmitButton className={BUTTON_CLASS} pendingLabel="Taking down…">
+              Take down and hold
+            </FormSubmitButton>
+          </form>
+          {reassignToggle}
+        </div>
+      )}
 
-      <form action={action} className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end">
-        <input type="hidden" name="pageId" value={page.id} />
-        <input type="hidden" name="operation" value="reassign" />
-        <label className="min-w-0 flex-1 font-bold">
-          Reassign owner
-          <select name="ownerAccountId" defaultValue={page.ownerAccountId} className={INPUT_CLASS}>
-            {accounts.map((account) => (
-              <option
-                key={account.id}
-                value={account.id}
-                disabled={account.hasPage && account.id !== page.ownerAccountId}
+      {isReassigning ? (
+        <div
+          id={reassignPanelId}
+          className="mt-5 border-2 border-ink bg-surface p-4 shadow-[3px_3px_0_0_var(--color-muted)]"
+        >
+          <form
+            action={action}
+            className="flex flex-col gap-3 sm:flex-row sm:items-end"
+          >
+            <input type="hidden" name="pageId" value={page.id} />
+            <input type="hidden" name="operation" value="reassign" />
+            <label className="min-w-0 flex-1 font-bold">
+              New owner
+              <select
+                name="ownerAccountId"
+                defaultValue={page.ownerAccountId}
+                className={INPUT_CLASS}
               >
-                <AccountLabel account={account} />
-                {account.hasPage && account.id !== page.ownerAccountId ? " — already has a page" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-        <FormSubmitButton className={BUTTON_CLASS} pendingLabel="Reassigning…">Reassign</FormSubmitButton>
-      </form>
-      <p role="status" aria-live="polite" className={`mt-3 text-sm ${state.status === "error" ? "font-bold text-decorative-red" : "font-bold text-muted"}`}>{state.message}</p>
+                {accounts.map((account) => (
+                  <option
+                    key={account.id}
+                    value={account.id}
+                    disabled={account.hasPage && account.id !== page.ownerAccountId}
+                  >
+                    <AccountLabel account={account} />
+                    {account.id === page.ownerAccountId
+                      ? " — current owner"
+                      : account.assignedPageSlug
+                        ? ` — owns /m/${account.assignedPageSlug}`
+                        : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <FormSubmitButton className={BUTTON_CLASS} pendingLabel="Reassigning…">
+              Confirm reassign
+            </FormSubmitButton>
+          </form>
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            Reassignment transfers the page&apos;s private draft and page-scoped
+            assets to the new owner.
+          </p>
+        </div>
+      ) : null}
+
+      {/* Legacy publication controls: bridge period, non-cohort pages only. */}
+      {!page.isV2Cohort ? (
+        <details className="mt-5 border-2 border-dashed border-muted/60 p-4">
+          <summary className="cursor-pointer text-sm font-bold text-muted">
+            Legacy controls (bridge period)
+          </summary>
+          <form action={action} className="mt-4 flex flex-wrap items-end gap-3">
+            <input type="hidden" name="pageId" value={page.id} />
+            <input
+              type="hidden"
+              name="operation"
+              value={page.isPublished ? "unpublish" : "publish"}
+            />
+            <FormSubmitButton className={BUTTON_CLASS} pendingLabel="Updating…">
+              {page.isPublished ? "Unpublish" : "Publish"}
+            </FormSubmitButton>
+          </form>
+        </details>
+      ) : null}
+
+      <p
+        role="status"
+        aria-live="polite"
+        className={`mt-3 text-sm ${
+          state.status === "error"
+            ? "font-bold text-decorative-red"
+            : "font-bold text-muted"
+        }`}
+      >
+        {state.message}
+      </p>
     </div>
   );
 }

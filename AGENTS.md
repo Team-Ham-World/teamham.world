@@ -10,4 +10,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Neon migrations
 
-For Neon/Postgres schema changes or migration execution, use the project-installed `neon` and `neon-postgres` skills and follow `docs/NEON_MIGRATIONS.md`.
+For Neon/Postgres schema changes or migration execution, use the global `neon` and `neon-postgres` skills and follow `docs/NEON_MIGRATIONS.md`.
+
+# Orchestration Guidance
+- When delegating implementation tasks, do so by providing a comprehensive prompt. Ensure that granular context is provided for better implementation.
+- Assume that subagents are junior developers and they need all information they can get.

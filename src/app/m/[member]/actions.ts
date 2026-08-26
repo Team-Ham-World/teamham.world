@@ -11,14 +11,22 @@ import {
 } from "@/lib/members/dal";
 import {
   memberContentFromFormData,
+  validateMemberSlug,
   type MemberFieldErrors,
 } from "@/lib/members/validation";
+import { isMemberPageV2Cohort } from "@/lib/members/v2/feature-flag";
 import { memberPath } from "@/lib/site";
 
 export interface MemberEditorState {
   status: "idle" | "success" | "error";
   message: string;
   fieldErrors: MemberFieldErrors;
+}
+
+function revalidateMemberPublicSurfaces(slug: string) {
+  revalidatePath(memberPath(slug));
+  revalidatePath("/members");
+  revalidatePath("/api/members");
 }
 
 export async function updateMemberPageAction(
@@ -28,13 +36,20 @@ export async function updateMemberPageAction(
   const slug = formData.get("slug");
 
   try {
+    const normalizedSlug = validateMemberSlug(slug);
+    if (normalizedSlug && isMemberPageV2Cohort(normalizedSlug)) {
+      return {
+        status: "error",
+        message: "This page uses the new editor and cannot be saved here.",
+        fieldErrors: {},
+      };
+    }
+
     const updatedSlug = await updateOwnedMemberPage(
       slug,
       memberContentFromFormData(formData),
     );
-    revalidatePath(memberPath(updatedSlug));
-    revalidatePath("/members");
-    revalidatePath("/api/members");
+    revalidateMemberPublicSurfaces(updatedSlug);
     return {
       status: "success",
       message: "Your page is saved.",

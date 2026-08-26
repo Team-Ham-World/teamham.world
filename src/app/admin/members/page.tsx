@@ -47,25 +47,47 @@ export default async function AdminMembersPage() {
             <p className="mt-7 border-2 border-dashed border-muted p-6 text-muted">No member pages have been created.</p>
           ) : (
             <ul className="mt-7 grid gap-6 lg:grid-cols-2">
-              {data.pages.map((page) => (
-                <li key={page.id} className="border-2 border-ink bg-paper p-5 shadow-[5px_5px_0_0_var(--color-ink)]">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                      <h3 className="font-display text-2xl">{page.displayName}</h3>
-                      {page.isPublished ? (
-                        <Link href={memberPath(page.slug)} className="mt-1 inline-flex min-h-11 items-center font-bold text-interactive-blue underline underline-offset-4">/m/{page.slug}</Link>
-                      ) : (
-                        <p className="mt-2 font-bold text-muted">/m/{page.slug}</p>
-                      )}
-                    </div>
-                    <span className={`border-2 border-ink px-2 py-1 text-xs font-bold tracking-[0.12em] uppercase ${page.isPublished ? "bg-interactive-blue text-paper" : "bg-surface text-ink"}`}>
-                      {page.isPublished ? "Published" : "Draft"}
+              {data.pages.map((page) => {
+                // Determine status badge
+                let statusBadge: React.ReactNode;
+                if (page.moderationHold) {
+                  statusBadge = (
+                    <span className="border-2 border-ink bg-decorative-red px-2 py-1 text-xs font-bold tracking-[0.12em] text-paper uppercase">
+                      Held
                     </span>
-                  </div>
-                  <p className="mt-3 text-sm text-muted">Owner: {page.ownerUsername ? `@${page.ownerUsername}` : `Member ${page.ownerAccountId.slice(0, 8)}`}</p>
-                  <AdminMemberRowControls page={page} accounts={data.accounts} />
-                </li>
-              ))}
+                  );
+                } else if (page.isPublished) {
+                  statusBadge = (
+                    <span className="border-2 border-ink bg-interactive-blue px-2 py-1 text-xs font-bold tracking-[0.12em] text-paper uppercase">
+                      Published
+                    </span>
+                  );
+                } else {
+                  statusBadge = (
+                    <span className="border-2 border-ink bg-surface px-2 py-1 text-xs font-bold tracking-[0.12em] text-ink uppercase">
+                      Unpublished
+                    </span>
+                  );
+                }
+
+                return (
+                  <li key={page.id} className="border-2 border-ink bg-paper p-5 shadow-[5px_5px_0_0_var(--color-ink)]">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <h3 className="font-display text-2xl">{page.displayName}</h3>
+                        {page.isPublished && !page.moderationHold ? (
+                          <Link href={memberPath(page.slug)} className="mt-1 inline-flex min-h-11 items-center font-bold text-interactive-blue underline underline-offset-4">/m/{page.slug}</Link>
+                        ) : (
+                          <p className="mt-2 font-bold text-muted">/m/{page.slug}</p>
+                        )}
+                      </div>
+                      {statusBadge}
+                    </div>
+                    <p className="mt-3 text-sm text-muted">Owner: {page.ownerUsername ? `@${page.ownerUsername}` : `Member ${page.ownerAccountId.slice(0, 8)}`}</p>
+                    <AdminMemberRowControls page={page} accounts={data.accounts} />
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

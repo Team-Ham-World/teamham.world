@@ -6,9 +6,7 @@ function json(body: unknown, status = 200) {
   return Response.json(body, {
     status,
     headers: {
-      "Cache-Control": status === 200
-        ? "public, max-age=30, stale-while-revalidate=120"
-        : "no-store",
+      "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
     },
   });

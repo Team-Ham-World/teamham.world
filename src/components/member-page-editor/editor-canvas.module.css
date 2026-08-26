@@ -1,0 +1,150 @@
+/*
+ * Canvas region state and chrome reveal.
+ *
+ * This is one of the few places the editor reaches past Tailwind. The strip's
+ * visibility is a four-way rule — hover, focus inside the region, selected,
+ * invalid — competing with a breakpoint default, and expressing that as
+ * utilities leaves the outcome resting on generated cascade order rather than
+ * on anything stated here. Written out once, the rule is unambiguous and every
+ * state that reveals the strip sits in a single place.
+ */
+
+/*
+ * `isolation` keeps a region's chrome inside that region's own stacking
+ * context. Without it every overlay competed at document level, so the strip
+ * belonging to a block the pointer merely passed over painted on top of the
+ * block actually being dragged — two strips over one block, and the page
+ * underneath showing through both.
+ */
+.region {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/*
+ * Selection reads as a rule down the region's edge, not as a box drawn around
+ * it. A ring floating a few pixels off the content collides with whatever sits
+ * beside it — in the two-column profile-and-showcase layout, with the other
+ * column — and gets cut wherever the page clips. The rule lives in the sheet's
+ * own margin, is drawn by a pseudo-element so nothing reflows when a region is
+ * picked up or put down, and matches the marker on the same block's row in the
+ * outline rail.
+ */
+.region::before {
+  content: "";
+  position: absolute;
+  top: -0.5rem;
+  bottom: -0.5rem;
+  left: -1rem;
+  width: 0.25rem;
+  pointer-events: none;
+  background-color: transparent;
+}
+
+@media (hover: hover) {
+  .region:hover::before {
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--color-ink) 35%, transparent) 0 60%,
+      transparent 60% 100%
+    );
+    background-size: 100% 0.5rem;
+    background-repeat: repeat-y;
+  }
+}
+
+.region[data-selected="true"]::before {
+  background-color: var(--color-interactive-blue);
+  background-image: none;
+}
+
+.region[data-invalid="true"]::before {
+  background-color: var(--color-decorative-red);
+  background-image: none;
+}
+
+/* A tint too faint to alter contrast, and never the only signal. */
+.region[data-selected="true"] {
+  background-color: color-mix(
+    in srgb,
+    var(--color-interactive-blue) 4%,
+    transparent
+  );
+}
+
+.region[data-invalid="true"] {
+  background-color: color-mix(
+    in srgb,
+    var(--color-decorative-red) 4%,
+    transparent
+  );
+}
+
+/* The block in hand travels above every other region and its chrome. */
+.region[data-dragging="true"] {
+  z-index: 10;
+  background-color: var(--color-surface);
+  box-shadow: 8px 8px 0 0 var(--color-ink);
+}
+
+/*
+ * The overlay spans the region so the strip can stick to the top of the
+ * viewport while any part of a multi-screen block is on show. It never takes
+ * pointer input itself; `pointer-events` inherits, so the strip alone decides
+ * whether the controls under it are live.
+ *
+ * It starts one strip-height above the region, so at rest the controls sit
+ * entirely in the gap and never cover the preview they label — the block's own
+ * heading used to disappear behind them. The gap between blocks and the
+ * sheet's top padding are both sized to hold it. Its lower edge meets the
+ * region's, leaving no dead band for the pointer to cross on the way up.
+ */
+.overlay {
+  position: absolute;
+  inset: -3.5rem 0 0 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+/*
+ * One row, always. Wrapping turned the strip into a two-storey panel that sat
+ * on top of the block it belongs to, hiding the very preview it labels.
+ */
+.toolbar {
+  position: sticky;
+  top: 0.75rem;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  max-width: 100%;
+  pointer-events: auto;
+}
+
+/*
+ * Below the three-column breakpoint the strip is always drawn: a touch screen
+ * has no hover, and there is no second place to reach these controls from.
+ */
+@media (min-width: 80rem) {
+  .toolbar {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms ease;
+  }
+
+  .region:hover > .overlay > .toolbar,
+  .region:focus-within > .overlay > .toolbar,
+  .region[data-selected="true"] > .overlay > .toolbar,
+  .region[data-invalid="true"] > .overlay > .toolbar {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toolbar {
+    transition: none;
+  }
+}

@@ -16,7 +16,10 @@ describe("public members endpoint", () => {
     ]);
     const response = await GET();
     expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toContain("public");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("cache-control")).not.toContain(
+      "stale-while-revalidate",
+    );
     expect(await response.json()).toEqual({
       members: [{ slug: "alice", displayName: "Alice", blurb: "Makes games." }],
     });
@@ -34,6 +37,7 @@ describe("public members endpoint", () => {
     vi.mocked(memberDal.listPublishedMembers).mockRejectedValueOnce(new Error("secret host"));
     const response = await GET();
     expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
     expect(await response.json()).toEqual({ error: "service_unavailable" });
   });
 });

@@ -1,3 +1,6 @@
+import { parseMemberPageR2Config } from "../src/lib/members/assets/config";
+import { parseMemberPageV2Rollout } from "../src/lib/members/v2/feature-flag";
+
 const FORBIDDEN_IN_DISABLED = [
   "APP_BASE_URL",
   "OAUTH_STATE_HMAC_SECRET",
@@ -7,6 +10,12 @@ const FORBIDDEN_IN_DISABLED = [
   "DISCORD_GUILD_ID",
   "DISCORD_REQUIRED_ROLE_ID",
   "DATABASE_URL",
+  "MEMBER_PAGE_R2_ENVIRONMENT",
+  "MEMBER_PAGE_R2_ACCOUNT_ID",
+  "MEMBER_PAGE_R2_ACCESS_KEY_ID",
+  "MEMBER_PAGE_R2_SECRET_ACCESS_KEY",
+  "MEMBER_PAGE_R2_BUCKET",
+  "MEMBER_PAGE_R2_ENDPOINT",
 ] as const;
 
 const SNOWFLAKE_REGEX = /^[0-9]{1,20}$/;
@@ -15,6 +24,39 @@ const HEX_64_REGEX = /^[0-9a-fA-F]{64}$/;
 function validatePreflight(): void {
   const errors: string[] = [];
   const authMode = process.env.AUTH_MODE;
+
+  const rollout = parseMemberPageV2Rollout({
+    MEMBER_PAGE_V2_ALLOWLIST: process.env.MEMBER_PAGE_V2_ALLOWLIST,
+    MEMBER_PAGE_V2_EDITOR_DISABLED:
+      process.env.MEMBER_PAGE_V2_EDITOR_DISABLED,
+  });
+  if (!rollout.success) errors.push(...rollout.errors);
+
+  const r2 = parseMemberPageR2Config(
+    {
+      MEMBER_PAGE_R2_ENVIRONMENT: process.env.MEMBER_PAGE_R2_ENVIRONMENT,
+      MEMBER_PAGE_R2_ACCOUNT_ID: process.env.MEMBER_PAGE_R2_ACCOUNT_ID,
+      MEMBER_PAGE_R2_ACCESS_KEY_ID:
+        process.env.MEMBER_PAGE_R2_ACCESS_KEY_ID,
+      MEMBER_PAGE_R2_SECRET_ACCESS_KEY:
+        process.env.MEMBER_PAGE_R2_SECRET_ACCESS_KEY,
+      MEMBER_PAGE_R2_BUCKET: process.env.MEMBER_PAGE_R2_BUCKET,
+      MEMBER_PAGE_R2_ENDPOINT: process.env.MEMBER_PAGE_R2_ENDPOINT,
+    },
+    authMode === "production" ? "production" : "nonproduction",
+  );
+  if (!r2.success) errors.push(...r2.errors);
+  if (
+    rollout.success &&
+    rollout.rollout.cohort.kind !== "none" &&
+    !rollout.rollout.editorDisabled &&
+    r2.success &&
+    r2.config === null
+  ) {
+    errors.push(
+      "Complete MEMBER_PAGE_R2_* configuration is required when the member page V2 editor is enabled for a non-empty cohort.",
+    );
+  }
 
   if (!authMode || !["disabled", "development", "production"].includes(authMode)) {
     errors.push(
