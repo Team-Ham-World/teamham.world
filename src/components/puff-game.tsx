@@ -49,7 +49,8 @@ interface Palette {
 interface PuffSpriteAtlas {
   palette: Palette;
   sprites: Record<SpritePose, HTMLCanvasElement>;
-  backgroundTile: HTMLCanvasElement;
+  backgroundFar: HTMLCanvasElement;
+  backgroundNear: HTMLCanvasElement;
 }
 
 const FIXED_STEP = 1 / 60;
@@ -57,6 +58,8 @@ const MAX_FRAME_DELTA = 0.1;
 const MAX_CATCH_UP_STEPS = 5;
 const BEST_SCORE_KEY = "ham:flappy-puff:best:v1";
 const FLAP_KEYS = new Set(["Space", "ArrowUp", "KeyW"]);
+const FAR_PARALLAX_SPEED = 0.07;
+const NEAR_PARALLAX_SPEED = 0.16;
 
 function cssColor(style: CSSStyleDeclaration, name: string, fallback: string) {
   return style.getPropertyValue(name).trim() || fallback;
@@ -113,23 +116,117 @@ function makePuffSprite(palette: Palette, pose: SpritePose): HTMLCanvasElement {
   return canvas;
 }
 
-function makeBackgroundTile(palette: Palette): HTMLCanvasElement {
-  const size = 192;
+/* Scenery is rasterized once per game opening. Live frames only blit a few
+   cached tiles, keeping the parallax cost flat across replays. */
+function makeFarBackground(palette: Palette): HTMLCanvasElement {
+  const width = 720;
+  const height = 560;
   const canvas = document.createElement("canvas");
-  canvas.width = size;
-  canvas.height = size;
+  canvas.width = width;
+  canvas.height = height;
   const context = canvas.getContext("2d");
   if (!context) return canvas;
 
-  context.font = "11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  context.textBaseline = "top";
-  context.fillStyle = palette.muted;
-  for (let y = 24; y < size; y += 48) {
-    for (let x = ((y / 48) % 2) * 21; x < size; x += 48) {
-      const bit = Math.floor(x + y) % 5;
-      context.fillText(bit === 0 ? "+" : bit === 1 ? ":" : ".", x, y);
+  context.strokeStyle = palette.blue;
+  context.lineWidth = 1;
+  context.globalAlpha = 0.055;
+  for (let x = 0.5; x < width; x += 80) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+  }
+  for (let y = 0.5; y < height; y += 80) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+
+  context.globalAlpha = 0.12;
+  context.lineWidth = 2;
+  context.beginPath();
+  context.arc(570, 390, 62, 0, Math.PI * 2);
+  context.arc(570, 390, 94, 0, Math.PI * 2);
+  context.moveTo(450, 390);
+  context.lineTo(690, 390);
+  context.moveTo(570, 270);
+  context.lineTo(570, 510);
+  context.stroke();
+
+  const stacks = [
+    { x: 0, width: 112, height: 116 },
+    { x: 126, width: 92, height: 188 },
+    { x: 232, width: 144, height: 142 },
+    { x: 392, width: 104, height: 224 },
+    { x: 512, width: 132, height: 164 },
+    { x: 658, width: 62, height: 126 },
+  ] as const;
+
+  for (const stack of stacks) {
+    const top = height - stack.height;
+    context.globalAlpha = 0.045;
+    context.fillStyle = palette.blue;
+    context.fillRect(stack.x, top, stack.width, stack.height);
+    context.globalAlpha = 0.14;
+    context.strokeRect(stack.x + 1, top + 1, stack.width - 2, stack.height - 2);
+    for (let y = top + 18; y < height; y += 22) {
+      context.beginPath();
+      context.moveTo(stack.x + 9, y);
+      context.lineTo(stack.x + stack.width - 9, y);
+      context.stroke();
     }
   }
+
+  context.globalAlpha = 0.17;
+  context.fillStyle = palette.blue;
+  context.font = "800 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  context.textBaseline = "top";
+  context.fillText("COPY ROOM / FAR FEED", 18, height - 24);
+  return canvas;
+}
+
+function makeNearBackground(palette: Palette): HTMLCanvasElement {
+  const width = 520;
+  const height = 320;
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) return canvas;
+
+  context.strokeStyle = palette.red;
+  context.lineJoin = "miter";
+  context.globalAlpha = 0.1;
+  context.lineWidth = 4;
+  context.beginPath();
+  context.moveTo(-42, height);
+  context.lineTo(148, 112);
+  context.lineTo(272, 112);
+  context.lineTo(78, height);
+  context.moveTo(242, height);
+  context.lineTo(430, 158);
+  context.lineTo(548, 158);
+  context.lineTo(394, height);
+  context.stroke();
+
+  context.globalAlpha = 0.13;
+  context.lineWidth = 2;
+  context.strokeRect(116, 196, 126, 88);
+  context.strokeRect(128, 184, 126, 88);
+  for (let y = 204; y < 260; y += 18) {
+    context.beginPath();
+    context.moveTo(145, y);
+    context.lineTo(232, y);
+    context.stroke();
+  }
+
+  context.beginPath();
+  context.arc(454, 260, 48, Math.PI, Math.PI * 2);
+  context.arc(454, 260, 72, Math.PI, Math.PI * 2);
+  context.moveTo(370, 260);
+  context.lineTo(520, 260);
+  context.stroke();
   return canvas;
 }
 
@@ -143,27 +240,50 @@ function buildPuffSpriteAtlas(): PuffSpriteAtlas {
       down: makePuffSprite(palette, "down"),
       dead: makePuffSprite(palette, "dead"),
     },
-    backgroundTile: makeBackgroundTile(palette),
+    backgroundFar: makeFarBackground(palette),
+    backgroundNear: makeNearBackground(palette),
   };
+}
+
+function drawRepeatingLayer(
+  context: CanvasRenderingContext2D,
+  layer: HTMLCanvasElement,
+  viewportWidth: number,
+  y: number,
+  offset: number,
+) {
+  const firstX = -(offset % layer.width);
+  for (let x = firstX; x < viewportWidth; x += layer.width) {
+    context.drawImage(layer, x, y);
+  }
 }
 
 function drawBackground(
   context: CanvasRenderingContext2D,
   state: PuffGameState,
-  palette: Palette,
-  pattern: CanvasPattern | null,
+  atlas: PuffSpriteAtlas,
+  parallaxMotion: boolean,
 ) {
+  const { palette, backgroundFar, backgroundNear } = atlas;
   context.fillStyle = palette.surface;
   context.fillRect(0, 0, state.width, state.height);
-  if (pattern) {
-    const drift = (state.groundOffset * 0.22) % 192;
-    context.save();
-    context.translate(-drift, 0);
-    context.globalAlpha = 0.14;
-    context.fillStyle = pattern;
-    context.fillRect(drift, 0, state.width + 192, state.height - GROUND_HEIGHT);
-    context.restore();
-  }
+
+  const floor = state.height - GROUND_HEIGHT;
+  const travel = parallaxMotion ? state.groundOffset : 0;
+  drawRepeatingLayer(
+    context,
+    backgroundFar,
+    state.width,
+    floor - backgroundFar.height,
+    travel * FAR_PARALLAX_SPEED,
+  );
+  drawRepeatingLayer(
+    context,
+    backgroundNear,
+    state.width,
+    floor - backgroundNear.height,
+    travel * NEAR_PARALLAX_SPEED,
+  );
 }
 
 function drawGateSection(
@@ -273,10 +393,10 @@ function drawGame(
   context: CanvasRenderingContext2D,
   state: PuffGameState,
   atlas: PuffSpriteAtlas,
-  backgroundPattern: CanvasPattern | null,
+  parallaxMotion: boolean,
   time: number,
 ) {
-  drawBackground(context, state, atlas.palette, backgroundPattern);
+  drawBackground(context, state, atlas, parallaxMotion);
   for (const gate of state.gates) {
     if (gate.x + GATE_WIDTH + 8 < 0 || gate.x - 8 > state.width) continue;
     drawGate(context, state, atlas.palette, gate);
@@ -578,10 +698,11 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
 
     let needsRedraw = true;
     let lastDrawnPhase: GamePhase | null = null;
-    let backgroundPattern: CanvasPattern | null = null;
     const coarsePointer =
       window.matchMedia("(any-pointer: coarse)").matches ||
       navigator.maxTouchPoints > 0;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let parallaxMotion = !reducedMotion.matches;
     let renderProfile = getPuffRenderProfile({
       devicePixelRatio: window.devicePixelRatio || 1,
       coarsePointer,
@@ -609,6 +730,11 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(arena);
+    const onReducedMotionChange = (event: MediaQueryListEvent) => {
+      parallaxMotion = !event.matches;
+      needsRedraw = true;
+    };
+    reducedMotion.addEventListener("change", onReducedMotionChange);
 
     let frameId = 0;
     let previous = performance.now();
@@ -644,9 +770,6 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
         accumulator = 0;
       }
 
-      if (atlas && !backgroundPattern) {
-        backgroundPattern = context.createPattern(atlas.backgroundTile, "repeat");
-      }
       const phaseChanged = currentPhase !== lastDrawnPhase;
       const renderStep = advancePuffRenderClock({
         accumulatorMs: renderAccumulatorMs,
@@ -658,7 +781,7 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
       });
       renderAccumulatorMs = renderStep.accumulatorMs;
       if (game && atlas && renderStep.shouldDraw) {
-        drawGame(context, game, atlas, backgroundPattern, now);
+        drawGame(context, game, atlas, parallaxMotion, now);
         needsRedraw = false;
         lastDrawnPhase = currentPhase;
       }
@@ -667,6 +790,7 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
     frameId = requestAnimationFrame(frame);
     return () => {
       observer.disconnect();
+      reducedMotion.removeEventListener("change", onReducedMotionChange);
       cancelAnimationFrame(frameId);
     };
   }, []);
