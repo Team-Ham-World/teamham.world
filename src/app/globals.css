@@ -74,6 +74,8 @@
 }
 
 body {
+  position: relative;
+  isolation: isolate;
   background-color: var(--color-paper);
   color: var(--color-ink);
   font-family: var(--font-body);
@@ -123,18 +125,164 @@ body:has([data-theme-scope="page"]) {
 }
 
 /*
- * The single permitted paper texture (BRAND.md §5): CSS grain at ~4%, rendered
- * behind all content so it never degrades text contrast. Inline SVG, no
- * network request, well under the 10KB tile budget.
+ * Print-shop registration backdrop.
+ *
+ * The old turbulence tile made isolated dark pixels look like dirt on the
+ * display. These two oversized planes use only crisp press rules, crop rails,
+ * and concentric registration arcs. They stay behind every reading surface;
+ * their different scroll-linked travel creates depth without a scroll handler
+ * or work on the main thread.
  */
-body::before {
+body::before,
+body::after {
   content: "";
   position: fixed;
-  inset: 0;
+  inset: -16vh -12vw;
   z-index: -1;
   pointer-events: none;
-  opacity: 0.045;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  transform: translate3d(0, 0, 0);
+}
+
+/* Far plate: a quiet blue ledger grid with three broad registration rings. */
+body::before {
+  background-image:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-interactive-blue) 4%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      color-mix(in srgb, var(--color-interactive-blue) 4%, transparent) 1px,
+      transparent 1px
+    ),
+    radial-gradient(
+      circle at 88% 18%,
+      transparent 0 9rem,
+      color-mix(in srgb, var(--color-interactive-blue) 13%, transparent) 9rem
+        calc(9rem + 2px),
+      transparent calc(9rem + 2px)
+    ),
+    radial-gradient(
+      circle at 88% 18%,
+      transparent 0 13rem,
+      color-mix(in srgb, var(--color-interactive-blue) 10%, transparent) 13rem
+        calc(13rem + 2px),
+      transparent calc(13rem + 2px)
+    ),
+    radial-gradient(
+      circle at 88% 18%,
+      transparent 0 17rem,
+      color-mix(in srgb, var(--color-interactive-blue) 7%, transparent) 17rem
+        calc(17rem + 2px),
+      transparent calc(17rem + 2px)
+    );
+  background-size:
+    7rem 7rem,
+    7rem 7rem,
+    100% 100%,
+    100% 100%,
+    100% 100%;
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    rgb(0 0 0 / 72%) 22%,
+    rgb(0 0 0 / 10%) 43%,
+    rgb(0 0 0 / 10%) 57%,
+    rgb(0 0 0 / 72%) 78%,
+    #000 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    rgb(0 0 0 / 72%) 22%,
+    rgb(0 0 0 / 10%) 43%,
+    rgb(0 0 0 / 10%) 57%,
+    rgb(0 0 0 / 72%) 78%,
+    #000 100%
+  );
+}
+
+/* Near plate: offset red rails and a cropped arc, kept to the page margins. */
+body::after {
+  background-image:
+    repeating-linear-gradient(
+      132deg,
+      transparent 0 2.25rem,
+      color-mix(in srgb, var(--color-decorative-red) 9%, transparent) 2.25rem
+        calc(2.25rem + 2px),
+      transparent calc(2.25rem + 2px) 6rem
+    ),
+    radial-gradient(
+      circle at 7% 78%,
+      transparent 0 7rem,
+      color-mix(in srgb, var(--color-decorative-red) 15%, transparent) 7rem
+        calc(7rem + 3px),
+      transparent calc(7rem + 3px)
+    ),
+    radial-gradient(
+      circle at 7% 78%,
+      transparent 0 10.5rem,
+      color-mix(in srgb, var(--color-decorative-red) 9%, transparent) 10.5rem
+        calc(10.5rem + 2px),
+      transparent calc(10.5rem + 2px)
+    );
+  -webkit-mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    rgb(0 0 0 / 88%) 13%,
+    transparent 31%,
+    transparent 69%,
+    rgb(0 0 0 / 88%) 87%,
+    #000 100%
+  );
+  mask-image: linear-gradient(
+    90deg,
+    #000 0%,
+    rgb(0 0 0 / 88%) 13%,
+    transparent 31%,
+    transparent 69%,
+    rgb(0 0 0 / 88%) 87%,
+    #000 100%
+  );
+}
+
+@supports (animation-timeline: scroll()) {
+  body::before {
+    animation: backdrop-far linear both;
+    animation-timeline: scroll(root block);
+  }
+
+  body::after {
+    animation: backdrop-near linear both;
+    animation-timeline: scroll(root block);
+  }
+
+  @keyframes backdrop-far {
+    from {
+      transform: translate3d(0, -2vh, 0);
+    }
+    to {
+      transform: translate3d(0, 8vh, 0);
+    }
+  }
+
+  @keyframes backdrop-near {
+    from {
+      transform: translate3d(0, -5vh, 0);
+    }
+    to {
+      transform: translate3d(0, 14vh, 0);
+    }
+  }
+}
+
+/* Member themes and the editor own their sheet; the HAM backdrop stays out. */
+body:has([data-theme-scope="page"])::before,
+body:has([data-theme-scope="page"])::after,
+body:has([data-editor-workspace="app-shell"])::before,
+body:has([data-editor-workspace="app-shell"])::after {
+  display: none;
 }
 
 /* High-visibility 3px offset focus outline (BRAND.md §2, WEBSITE.md §9). */
@@ -220,6 +368,12 @@ body::before {
  * all become immediate/static (BRAND.md §5, WEBSITE.md §9).
  */
 @media (prefers-reduced-motion: reduce) {
+  body::before,
+  body::after {
+    animation: none !important;
+    transform: none;
+  }
+
   [data-puff-launcher]::after {
     transition: none;
   }
