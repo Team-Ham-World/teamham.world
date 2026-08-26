@@ -16,12 +16,16 @@ import type {
   PuffLeaderboardEntry,
   PuffLeaderboardSnapshot,
 } from "@/lib/puff/leaderboard";
-import { getPuffRenderProfile } from "@/lib/puff/performance";
+import {
+  advancePuffRenderClock,
+  getPuffRenderProfile,
+  type PuffRenderPhase,
+} from "@/lib/puff/performance";
 import { renderPuff } from "@/lib/puff/render";
 
 import styles from "./puff-game.module.css";
 
-type GamePhase = "ready" | "playing" | "paused" | "dead";
+type GamePhase = PuffRenderPhase;
 type SpritePose = "level" | "up" | "down" | "dead";
 type LeaderboardState =
   | { status: "loading"; authenticated: false; username: null }
@@ -51,7 +55,6 @@ interface PuffSpriteAtlas {
 const FIXED_STEP = 1 / 60;
 const MAX_FRAME_DELTA = 0.1;
 const MAX_CATCH_UP_STEPS = 5;
-const RENDER_EARLY_TOLERANCE_MS = 1.5;
 const BEST_SCORE_KEY = "ham:flappy-puff:best:v1";
 const FLAP_KEYS = new Set(["Space", "ArrowUp", "KeyW"]);
 
@@ -618,7 +621,6 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
       const elapsedMs = Math.max(0, now - previous);
       const delta = Math.min(MAX_FRAME_DELTA, elapsedMs / 1_000);
       previous = now;
-      renderAccumulatorMs += elapsedMs;
 
       if (game && currentPhase === "playing") {
         accumulator += delta;
@@ -645,24 +647,20 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
       if (atlas && !backgroundPattern) {
         backgroundPattern = context.createPattern(atlas.backgroundTile, "repeat");
       }
-      const sceneIsMoving = currentPhase === "playing" || currentPhase === "ready";
       const phaseChanged = currentPhase !== lastDrawnPhase;
-      const movingFrameIsDue =
-        sceneIsMoving &&
-        (phaseChanged ||
-          renderAccumulatorMs + RENDER_EARLY_TOLERANCE_MS >=
-            renderProfile.frameIntervalMs);
-      if (
-        game &&
-        atlas &&
-        (movingFrameIsDue || needsRedraw || phaseChanged)
-      ) {
+      const renderStep = advancePuffRenderClock({
+        accumulatorMs: renderAccumulatorMs,
+        elapsedMs,
+        frameIntervalMs: renderProfile.frameIntervalMs,
+        phase: currentPhase,
+        forceDraw: needsRedraw || phaseChanged,
+        canDraw: Boolean(game && atlas),
+      });
+      renderAccumulatorMs = renderStep.accumulatorMs;
+      if (game && atlas && renderStep.shouldDraw) {
         drawGame(context, game, atlas, backgroundPattern, now);
         needsRedraw = false;
         lastDrawnPhase = currentPhase;
-        renderAccumulatorMs = sceneIsMoving
-          ? Math.max(0, renderAccumulatorMs - renderProfile.frameIntervalMs)
-          : 0;
       }
       frameId = requestAnimationFrame(frame);
     };

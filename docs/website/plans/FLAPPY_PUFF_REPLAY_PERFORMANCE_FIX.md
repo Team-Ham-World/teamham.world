@@ -1,13 +1,14 @@
 # Flappy Puff Replay Performance Fix
 
-**Document Status**: DIAGNOSED / IMPLEMENTATION DEFERRED
+**Document Status**: IMPLEMENTED / VERIFIED
 **Date Diagnosed**: 2026-08-25
+**Date Implemented**: 2026-08-26
 **Primary Code**: `src/components/puff-game.tsx`
 **Test Seam**: `src/lib/puff/performance.ts` and `tests/unit/puff-performance.test.ts`
 
 ## 1. Purpose and scope
 
-Use this document after the current repository work is complete to fix the confirmed Flappy Puff replay performance regression. Reinspect the named files before implementation because concurrent work may have moved or changed the code described here.
+This document records the implemented fix for the confirmed Flappy Puff replay performance regression and its regression coverage.
 
 This fix covers the canvas render scheduler when a run resumes from a static phase:
 
@@ -59,9 +60,9 @@ The implementation is complete only when all of these invariants hold:
 - The animation frame and `ResizeObserver` cleanup behavior remains intact.
 - Canvas dimensions and the pixel-ratio profile remain unchanged.
 
-## 5. Preferred implementation
+## 5. Implemented approach
 
-Keep the change inside the render scheduler. Determine whether the scene is moving before advancing the render accumulator, then retain elapsed render time only for moving phases:
+The change stays inside the render scheduler. It determines whether the scene is moving before advancing the render accumulator, then retains elapsed render time only for moving phases:
 
 ```ts
 const sceneIsMoving = currentPhase === "playing" || currentPhase === "ready";
@@ -74,9 +75,9 @@ Continue using `phaseChanged` and `needsRedraw` to permit the one required stati
 
 Apply this behavior at the scheduler level instead of resetting only in `createFreshRun()`. A replay-only reset would leave pause/resume with the same defect. Do not change `getPuffRenderProfile()` to follow the display refresh rate; its 60 FPS cap is intentional.
 
-## 6. Regression test
+## 6. Regression coverage
 
-Extend the pure performance seam so the scheduling rule can be tested without browser timing or a mocked canvas. The component must consume the same exported scheduling logic the unit test exercises; a test-only duplicate of the algorithm is not sufficient.
+The pure performance seam now exposes the scheduling rule so it can be tested without browser timing or a mocked canvas. The component consumes the same exported scheduling logic exercised by the unit test.
 
 Add deterministic 120 Hz sequences covering:
 
@@ -117,3 +118,13 @@ Acceptance criteria:
 ## 8. Delivery boundary
 
 Keep the implementation limited to the scheduler, its shared pure test seam, and regression coverage. If the current code no longer matches the root-cause sequence in section 3, rerun the lifecycle probe before changing it; a different measurement requires a new diagnosis rather than carrying this fix forward by analogy.
+
+## 9. Implementation record
+
+- `src/lib/puff/performance.ts` owns the phase-aware render clock through `advancePuffRenderClock()`.
+- `src/components/puff-game.tsx` uses that clock for every canvas frame and no longer accumulates render time during `dead` or `paused`.
+- `tests/unit/puff-performance.test.ts` runs deterministic 120 Hz sequences through first run, death, replay, pause, and resume.
+- Targeted tests passed: 13/13 across the Puff game and performance suites.
+- Full test suite passed: 836 tests passed and 82 environment-dependent tests skipped.
+- Type checking and linting passed.
+- The 120 Hz browser probe measured 74 paints at 16.67 ms for both the first run and a replay after 1.5 seconds on the results screen. The replay work ratio was `1.00`, and pause/resume produced no sub-12 ms paint burst.
