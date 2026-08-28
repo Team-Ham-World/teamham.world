@@ -58,3 +58,11 @@
 16324b0ab70a504d3c0dc8341ae5282873809367:tests/integration/oauth-flow.test.ts:discord-client-id:861
 16324b0ab70a504d3c0dc8341ae5282873809367:tests/integration/oauth-flow.test.ts:discord-client-id:903
 16324b0ab70a504d3c0dc8341ae5282873809367:tests/integration/oauth-flow.test.ts:discord-client-id:942
+
+# Synthetic CI-only Discord snowflakes introduced by the member editor E2E job.
+f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:113
+f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:115
+f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:116
+f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:172
+f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:174
+f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:175
