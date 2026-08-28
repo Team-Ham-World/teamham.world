@@ -82,7 +82,7 @@ jobs:
       - name: Run disabled-mode HTTP smoke tests
         run: |
           LOG_FILE=$(mktemp)
-          npm run start -- --port 3000 > "$LOG_FILE" 2>&1 &
+          node_modules/.bin/next start --port 3000 > "$LOG_FILE" 2>&1 &
           SERVER_PID=$!
           trap 'kill -TERM $SERVER_PID 2>/dev/null || true; wait $SERVER_PID 2>/dev/null || true; rm -f "$LOG_FILE"' EXIT
 
