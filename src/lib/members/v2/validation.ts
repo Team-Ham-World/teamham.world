@@ -10,7 +10,6 @@ import type {
   MemberPageDocumentV2,
   MemberPageFrameV2,
   MemberProjectRef,
-  MemberThemeId,
   ProjectListBlock,
   RichTextBlock,
   SocialPlatformId,
@@ -41,8 +40,10 @@ import {
 } from "@/lib/members/v2/limits";
 import { parseRichTextDoc } from "@/lib/members/v2/rich-text";
 import {
-  MEMBER_PAGE_THEME_REGISTRY,
-  resolveEnabledThemeAccent,
+  assertNeverMemberThemeLifecycle,
+  getMemberThemeDefinition,
+  isMemberThemeId,
+  isRenderableThemeAccentPair,
 } from "@/lib/members/v2/themes";
 
 export interface MemberPageDocumentV2ValidationError {
@@ -377,23 +378,39 @@ function parseTheme(
     return null;
   }
 
-  if (!Object.hasOwn(MEMBER_PAGE_THEME_REGISTRY, theme.id)) {
+  if (!isMemberThemeId(theme.id)) {
     addError(state, [...path, "id"], "Unknown theme.");
     return null;
   }
-  const definition = MEMBER_PAGE_THEME_REGISTRY[
-    theme.id as MemberThemeId
-  ];
-  if (!definition.enabled) {
-    addError(state, [...path, "id"], "Theme is disabled.");
+  const definition = getMemberThemeDefinition(theme.id);
+  if (!definition) {
+    // Unreachable once the ID guard above passes; kept so the union-typed
+    // lookup stays honest without casts.
+    addError(state, [...path, "id"], "Unknown theme.");
     return null;
   }
-  if (!resolveEnabledThemeAccent(theme.id, theme.accentId)) {
-    addError(state, [...path, "accentId"], "Unknown or disabled accent.");
+  switch (definition.lifecycle) {
+    case "active":
+    case "legacy":
+      // Read/render acceptance: active themes are selectable and renderable;
+      // legacy themes stay valid for stored documents even though the picker
+      // omits them. This parser is NOT the write boundary — mutations apply
+      // the narrower `classifyThemeAccentPairForWrite` decision (see
+      // themes.ts) on top of it, so a legacy pair can never be newly selected
+      // through an autosave.
+      break;
+    case "revoked":
+      addError(state, [...path, "id"], "Theme is revoked.");
+      return null;
+    default:
+      assertNeverMemberThemeLifecycle(definition);
+  }
+  if (!isRenderableThemeAccentPair(definition, theme.accentId)) {
+    addError(state, [...path, "accentId"], "Unknown or unavailable accent.");
     return null;
   }
 
-  return { id: theme.id as MemberThemeId, accentId: theme.accentId };
+  return { id: theme.id, accentId: theme.accentId };
 }
 
 function parseFrame(

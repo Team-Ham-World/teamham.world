@@ -854,7 +854,11 @@ describe("member V2 asset DAL", () => {
 
     await expect(
       deleteOwnedMemberPageAsset("hamfriend", ASSET_ID, { storage }),
-    ).resolves.toEqual({ status: "referenced" });
+    ).resolves.toEqual({
+      status: "referenced",
+      // Unclassified rows fall back to the conservative owner-facing "both".
+      location: "both",
+    });
     expect(storage.deleteObject).not.toHaveBeenCalled();
   });
 
@@ -1031,6 +1035,7 @@ describe("member V2 asset DAL", () => {
     ]);
     expect(result).toEqual({
       status: "success",
+      degradedAssetIds: new Set<string>(),
       metadata: new Map([[
         ASSET_ID,
         { mimeType: "image/png", width: 2, height: 3 },
@@ -1052,7 +1057,7 @@ describe("member V2 asset DAL", () => {
     );
   });
 
-  it("fails closed when any published asset metadata is missing or malformed", async () => {
+  it("degrades missing or malformed published assets instead of failing the page", async () => {
     const missingId = "550e8400-e29b-41d4-a716-446655440021";
     mocks.query
       .mockResolvedValueOnce([{
@@ -1068,12 +1073,25 @@ describe("member V2 asset DAL", () => {
         height: 3,
       }]);
 
+    // A missing asset (deletion-claimed or absent) degrades alongside the one
+    // usable asset; attributable malformed metadata degrades the same way.
     await expect(
       getPublicMemberPageAssetMetadata("hamfriend", [ASSET_ID, missingId]),
-    ).resolves.toEqual({ status: "invalid" });
+    ).resolves.toEqual({
+      status: "success",
+      metadata: new Map([[
+        ASSET_ID,
+        { mimeType: "image/png", width: 2, height: 3 },
+      ]]),
+      degradedAssetIds: new Set([missingId]),
+    });
     await expect(
       getPublicMemberPageAssetMetadata("hamfriend", [ASSET_ID]),
-    ).resolves.toEqual({ status: "invalid" });
+    ).resolves.toEqual({
+      status: "success",
+      metadata: new Map(),
+      degradedAssetIds: new Set([ASSET_ID]),
+    });
   });
 
   it("distinguishes public metadata infrastructure failure", async () => {

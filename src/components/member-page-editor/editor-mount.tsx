@@ -45,6 +45,9 @@ export default function MemberPageEditorMount({
         publish: publishMemberPageV2Action,
         unpublish: unpublishMemberPageV2Action,
         reset: resetMemberPageV2Action,
+        // The loaded publication generation; the unpublish guard compares
+        // the presented token against the stored `published_at` boundary.
+        initialPublishedAt: draft.publishedAt,
       }}
     />
   );

@@ -10,8 +10,10 @@ import {
   MAX_URL_CHARS,
 } from "@/lib/members/v2/limits";
 import {
-  getEnabledMemberThemes,
-  resolveEnabledThemeAccent,
+  getRenderableMemberThemeDefinition,
+  getSelectableMemberThemes,
+  resolveRenderableThemeAccent,
+  type ResolvedMemberThemeAccent,
 } from "@/lib/members/v2/themes";
 import themeStyles from "@/components/member-page-v2/MemberPageV2View.module.css";
 import { memberThemeStyle } from "@/components/member-page-v2/member-theme-presentation";
@@ -57,11 +59,12 @@ export function FrameInspector({
       ? "Use a full https:// address."
       : undefined;
 
-  const enabledThemes = getEnabledMemberThemes();
-  const selectedTheme = enabledThemes.find(
-    (theme) => theme.id === frame.theme.id,
-  );
-  const selectedAccent = resolveEnabledThemeAccent(
+  // The picker lists selectable (active) themes only. A stored draft may still
+  // use a legacy theme: it resolves for display, accents, and preview but
+  // cannot be newly selected. Unknown or revoked pairs still fail closed.
+  const selectableThemes = getSelectableMemberThemes();
+  const selectedTheme = getRenderableMemberThemeDefinition(frame.theme.id);
+  const selectedAccent = resolveRenderableThemeAccent(
     frame.theme.id,
     frame.theme.accentId,
   );
@@ -216,12 +219,12 @@ export function FrameInspector({
           id="frame-theme"
           label="Page theme"
           value={frame.theme.id}
-          options={enabledThemes.map((theme) => ({
+          options={selectableThemes.map((theme) => ({
             value: theme.id,
             label: `${theme.label}${theme.id === "paper" ? " (default)" : ""}`,
           }))}
           onChange={(value) => {
-            const theme = enabledThemes.find((candidate) => candidate.id === value);
+            const theme = selectableThemes.find((candidate) => candidate.id === value);
             if (!theme) return;
             onChange({
               theme: { id: theme.id, accentId: theme.defaultAccentId },
@@ -250,7 +253,7 @@ export function FrameInspector({
 function ThemePreview({
   theme,
 }: {
-  theme: NonNullable<ReturnType<typeof resolveEnabledThemeAccent>>;
+  theme: ResolvedMemberThemeAccent;
 }) {
   return (
     <div>

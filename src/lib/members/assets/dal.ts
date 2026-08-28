@@ -193,9 +193,24 @@ export type MemberAssetDeleteResult =
   | { status: "success" }
   | { status: "not-found-or-forbidden" }
   | { status: "invalid" }
-  | { status: "referenced" }
+  | {
+      status: "referenced";
+      /**
+       * Owner-only classification of where the blocking reference lives. This
+       * never weakens the deletion invariant: the asset stays claimed-free and
+       * the SQL guard still requires both documents to be clear.
+       */
+      location: MemberAssetReferenceLocation;
+    }
   | { status: "conflict" }
   | { status: "unavailable" };
+
+/**
+ * Where a deletion-blocked asset is still referenced. Owner-only output: the
+ * generic editor never receives this for other viewers, and it carries no
+ * document content — only which stored document(s) hold the reference.
+ */
+export type MemberAssetReferenceLocation = "draft" | "published" | "both";
 
 export type MemberAssetServingResult =
   | {
@@ -217,10 +232,30 @@ export interface PublicMemberAssetMetadata {
   mimeType: MemberAssetMimeType;
 }
 
+/**
+ * Upper bound on the degraded asset-ID set. A page cannot reference more ready
+ * assets than the ready quota, so the bound never truncates in practice; it
+ * exists so the diagnostic set can never grow with a corrupted request.
+ */
+export const MEMBER_ASSET_PUBLIC_METADATA_DEGRADED_LIMIT = 20;
+
+/**
+ * Public metadata read for rendering a published page.
+ *
+ * - `success` carries every safely resolvable asset plus the bounded set of
+ *   requested asset IDs that are missing, deletion-claimed, or stored with
+ *   invalid metadata. Callers render unaffected content and give degraded
+ *   assets the existing safe leaf fallbacks.
+ * - `invalid` is reserved for malformed request input or unattributable
+ *   corruption, not for content-level asset problems.
+ * - `unavailable` means a database or storage failure: a service failure that
+ *   must never be rendered as ordinary 404 content.
+ */
 export type PublicMemberAssetMetadataResult =
   | {
       status: "success";
       metadata: ReadonlyMap<string, PublicMemberAssetMetadata>;
+      degradedAssetIds: ReadonlySet<string>;
     }
   | { status: "invalid" }
   | { status: "unavailable" };
@@ -342,6 +377,20 @@ function classifyMemberAssetDatabaseError(
     databaseError.constraint === MEMBER_ASSET_READY_COUNT_CONSTRAINT
     ? "ready-quota"
     : "other";
+}
+
+/**
+ * Parses the owner-only reference classification emitted by the deletion
+ * query's CASE expression. The SQL always yields one of the three literals;
+ * "both" is the conservative fallback because its owner-facing copy covers
+ * both stored documents without claiming where the reference uniquely sits.
+ */
+function parseReferenceLocation(
+  value: unknown,
+): MemberAssetReferenceLocation {
+  return value === "draft" || value === "published" || value === "both"
+    ? value
+    : "both";
 }
 
 async function deleteStorageObject(
@@ -1242,7 +1291,9 @@ export async function deleteOwnedMemberPageAsset(
   const storage = resolveStorage(dependencies);
   if (!storage) return { status: "unavailable" };
 
-  let rows: Array<CleanupAssetRow & { outcome?: unknown }>;
+  let rows: Array<
+    CleanupAssetRow & { outcome?: unknown; reference_location?: unknown }
+  >;
   try {
     const sql = getDbClient();
     rows = (await sql`
@@ -1275,7 +1326,19 @@ export async function deleteOwnedMemberPageAsset(
               jsonb_build_object('assetId', to_jsonb(asset.id::text)),
               TRUE
             )
-        ) AS is_referenced
+          ) AS is_referenced,
+          jsonb_path_exists(
+            page_guard.draft_doc,
+            '$.**.assetId ? (@ == $assetId)',
+            jsonb_build_object('assetId', to_jsonb(asset.id::text)),
+            TRUE
+          ) AS referenced_in_draft,
+          jsonb_path_exists(
+            COALESCE(page_guard.published_doc, 'null'::jsonb),
+            '$.**.assetId ? (@ == $assetId)',
+            jsonb_build_object('assetId', to_jsonb(asset.id::text)),
+            TRUE
+          ) AS referenced_in_published
         FROM public.member_page_assets asset
         JOIN page_guard ON page_guard.id = asset.member_page_id
         WHERE asset.id = ${assetIdInput}
@@ -1308,6 +1371,7 @@ export async function deleteOwnedMemberPageAsset(
       )
       SELECT
         'success'::text AS outcome,
+        NULL::text AS reference_location,
         newly_claimed.id,
         newly_claimed.object_key,
         newly_claimed.status,
@@ -1319,6 +1383,7 @@ export async function deleteOwnedMemberPageAsset(
       UNION ALL
       SELECT
         'success'::text AS outcome,
+        NULL::text AS reference_location,
         target.id,
         target.object_key,
         target.status,
@@ -1330,6 +1395,12 @@ export async function deleteOwnedMemberPageAsset(
       UNION ALL
       SELECT
         CASE WHEN target.is_referenced THEN 'referenced' ELSE 'conflict' END AS outcome,
+        CASE
+          WHEN target.referenced_in_draft AND target.referenced_in_published
+            THEN 'both'
+          WHEN target.referenced_in_draft THEN 'draft'
+          ELSE 'published'
+        END AS reference_location,
         NULL::uuid AS id,
         NULL::text AS object_key,
         NULL::varchar AS status,
@@ -1342,6 +1413,7 @@ export async function deleteOwnedMemberPageAsset(
       UNION ALL
       SELECT
         'not-found'::text AS outcome,
+        NULL::text AS reference_location,
         NULL::uuid AS id,
         NULL::text AS object_key,
         NULL::varchar AS status,
@@ -1350,12 +1422,16 @@ export async function deleteOwnedMemberPageAsset(
         NULL::boolean AS newly_claimed
       WHERE NOT EXISTS (SELECT 1 FROM target)
       LIMIT 1;
-    `) as Array<CleanupAssetRow & { outcome?: unknown }>;
+    `) as Array<
+      CleanupAssetRow & { outcome?: unknown; reference_location?: unknown }
+    >;
   } catch {
     return { status: "unavailable" };
   }
   if (rows.length !== 1) return { status: "unavailable" };
-  if (rows[0].outcome === "referenced") return { status: "referenced" };
+  if (rows[0].outcome === "referenced") {
+    return { status: "referenced", location: parseReferenceLocation(rows[0].reference_location) };
+  }
   if (rows[0].outcome === "conflict") return { status: "conflict" };
   if (rows[0].outcome === "not-found") {
     return { status: "not-found-or-forbidden" };
@@ -1588,12 +1664,14 @@ export async function getPublicMemberPageAssetMetadata(
     return { status: "invalid" };
   }
   if (assetIds.length === 0) {
-    return { status: "success", metadata: empty };
+    return { status: "success", metadata: empty, degradedAssetIds: new Set() };
   }
+  const requested = new Set(assetIds);
 
+  let rows: MetadataAssetRow[];
   try {
     const sql = getDbClient();
-    const rows = (await sql`
+    rows = (await sql`
       SELECT asset.id, asset.mime_type, asset.width, asset.height
       FROM public.member_page_assets asset
       JOIN public.member_pages page ON page.id = asset.member_page_id
@@ -1611,27 +1689,48 @@ export async function getPublicMemberPageAssetMetadata(
           TRUE
         );
     `) as MetadataAssetRow[];
-    const result = new Map<string, PublicMemberAssetMetadata>();
-    for (const row of rows) {
-      const width = parsePositiveInteger(row.width, ASSET_MAX_DIMENSION);
-      const height = parsePositiveInteger(row.height, ASSET_MAX_DIMENSION);
-      if (
-        typeof row.id !== "string" ||
-        !isValidUuid(row.id) ||
-        typeof row.mime_type !== "string" ||
-        !isMemberAssetMimeType(row.mime_type) ||
-        width === null ||
-        height === null
-      ) {
-        return { status: "invalid" };
-      }
-      result.set(row.id, { width, height, mimeType: row.mime_type });
-    }
-    if (result.size !== assetIds.length) return { status: "invalid" };
-    return { status: "success", metadata: result };
   } catch {
     return { status: "unavailable" };
   }
+
+  // Missing and deletion-claimed assets simply produce no row; the degrade set
+  // below covers them. Rows that exist but carry unusable metadata degrade
+  // only when the corruption is attributable to one requested asset ID.
+  const metadata = new Map<string, PublicMemberAssetMetadata>();
+  for (const row of rows) {
+    if (
+      typeof row.id !== "string" ||
+      !isValidUuid(row.id) ||
+      !requested.has(row.id)
+    ) {
+      // Corruption that cannot be attributed to a requested asset is stored
+      // state, not one broken medium: fail closed instead of degrading.
+      return { status: "invalid" };
+    }
+    const width = parsePositiveInteger(row.width, ASSET_MAX_DIMENSION);
+    const height = parsePositiveInteger(row.height, ASSET_MAX_DIMENSION);
+    if (
+      typeof row.mime_type !== "string" ||
+      !isMemberAssetMimeType(row.mime_type) ||
+      width === null ||
+      height === null
+    ) {
+      continue;
+    }
+    metadata.set(row.id, { width, height, mimeType: row.mime_type });
+  }
+
+  const degradedAssetIds = new Set<string>();
+  for (const assetId of assetIds) {
+    if (metadata.has(assetId)) continue;
+    degradedAssetIds.add(assetId);
+    if (degradedAssetIds.size >= MEMBER_ASSET_PUBLIC_METADATA_DEGRADED_LIMIT) {
+      // The bound protects process memory only. Rendering never depends on the
+      // set: every asset outside `metadata` degrades regardless.
+      break;
+    }
+  }
+  return { status: "success", metadata, degradedAssetIds };
 }
 
 export const allocateMemberPageAssetUpload = allocateOwnedMemberPageAsset;

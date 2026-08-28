@@ -525,25 +525,79 @@ describe("member V2 data access", () => {
     });
   });
 
-  it("unpublishes idempotently without changing either document", async () => {
+  it("unpublishes when the loaded publication generation still matches", async () => {
     mocks.query.mockResolvedValueOnce([{
+      outcome: "success",
       slug: "hamfriend",
       unpublished_at: NOW,
     }]);
 
-    await expect(unpublishOwnedMemberPageV2("hamfriend")).resolves.toEqual({
+    await expect(
+      unpublishOwnedMemberPageV2("hamfriend", "2026-08-20T09:00:00.000Z"),
+    ).resolves.toEqual({
       status: "success",
       slug: "hamfriend",
       unpublishedAt: NOW,
     });
 
     const sql = queryText(0);
+    const [, ...values] = mocks.query.mock.calls[0];
     expect(sql.match(/UPDATE public\.member_pages/gu)).toHaveLength(1);
     expect(sql).toContain("is_published = FALSE");
-    expect(sql).toContain("ELSE COALESCE(unpublished_at, NOW())");
+    expect(sql).toContain("ELSE COALESCE(page.unpublished_at, NOW())");
+    expect(sql).toContain(
+      "page.published_at IS NOT DISTINCT FROM ?::timestamptz",
+    );
+    expect(values).toContain("2026-08-20T09:00:00.000Z");
     expect(sql).not.toContain("moderation_hold = FALSE");
     expect(sql).not.toContain("draft_doc =");
     expect(sql).not.toContain("published_doc =");
+    expect(sql).not.toContain("draft_rev");
+  });
+
+  it("matches a null token only against a page that was never published", async () => {
+    mocks.query.mockResolvedValueOnce([{
+      outcome: "success",
+      slug: "hamfriend",
+      unpublished_at: NOW,
+    }]);
+
+    await expect(unpublishOwnedMemberPageV2("hamfriend", null)).resolves.toEqual({
+      status: "success",
+      slug: "hamfriend",
+      unpublishedAt: NOW,
+    });
+
+    const [, ...values] = mocks.query.mock.calls[0];
+    expect(values).toContain(null);
+    expect(queryText(0)).toContain(
+      "page.published_at IS NOT DISTINCT FROM ?::timestamptz",
+    );
+  });
+
+  it("returns a typed conflict for a stale publication token and writes nothing", async () => {
+    mocks.query.mockResolvedValueOnce([{
+      outcome: "conflict",
+      slug: null,
+      unpublished_at: null,
+    }]);
+
+    await expect(
+      unpublishOwnedMemberPageV2("hamfriend", "2026-08-20T09:00:00.000Z"),
+    ).resolves.toEqual({ status: "conflict" });
+
+    const sql = queryText(0);
+    expect(sql).toContain("'conflict'::text AS outcome");
+    expect(sql.match(/UPDATE public\.member_pages/gu)).toHaveLength(1);
+    expect(sql).not.toContain("draft_doc =");
+    expect(sql).not.toContain("published_doc =");
+  });
+
+  it("rejects a malformed publication token before querying", async () => {
+    await expect(unpublishOwnedMemberPageV2("hamfriend", 7)).resolves.toEqual({
+      status: "invalid",
+    });
+    expect(mocks.query).not.toHaveBeenCalled();
   });
 
   it("resets to a valid published snapshot while held", async () => {

@@ -107,8 +107,9 @@ const RAIL_SHEET_DESCRIPTION_ID = "member-page-rail-sheet-description";
 /**
  * Viewport gate around the editor's stateful client tree.
  *
- * A narrow browser receives only the requirement notice. Keeping the gate
- * outside DesktopMemberPageEditor is important: hiding controls with CSS
+ * A browser without the room or the input — narrower than 64rem, or coarse
+ * pointer, or touch-only — receives only the requirement notice. Keeping the
+ * gate outside DesktopMemberPageEditor is important: hiding controls with CSS
  * would still mount autosave, uploads, drag-and-drop, and publication actions.
  */
 export function MemberPageEditor(props: MemberPageEditorProps) {
@@ -138,16 +139,17 @@ export function EditorScreenRequirement({ slug }: { slug: string }) {
               Make room to edit.
             </h2>
             <p className="mt-5 max-w-xl text-base leading-relaxed text-muted sm:text-lg">
-              The page editor needs a desktop or laptop browser window at least
-              1280 pixels wide, with a mouse or trackpad. Your page and saved
-              draft are unchanged.
+              The page editor needs a desktop or laptop browser window at
+              least 1024 pixels wide, with a mouse or trackpad. Phones and
+              tablets are not supported. Your page and saved draft are
+              unchanged.
             </p>
           </div>
           <p
             aria-hidden="true"
             className="w-fit border-y-2 border-ink py-2 font-display text-2xl tracking-tight whitespace-nowrap sm:text-3xl"
           >
-            ≥ 1280 px
+            ≥ 1024 px
           </p>
         </div>
         <Link
@@ -167,11 +169,12 @@ export function EditorScreenRequirement({ slug }: { slug: string }) {
  *
  * Three fixed regions — a persistent bar, the tool rail, and the inspector —
  * frame one scrolling canvas that shows the real page. Each region scrolls on
- * its own from `xl` up, so save state, the page's structure, and the fields
- * for the selected thing are all reachable no matter how far down a long page
- * the owner has scrolled. Below `xl` the canvas takes the full width and the
- * two side regions become sheets, because there is no room for three columns
- * and a readable page at once.
+ * its own from `xl` (80rem) up, so save state, the page's structure, and the
+ * fields for the selected thing are all reachable no matter how far down a
+ * long page the owner has scrolled. In the compact band from 64rem the canvas
+ * takes the full width and the two side regions become bottom sheets, because
+ * there is no room for three columns and a readable page at once. The
+ * availability gate above keeps every smaller or touch-only browser out.
  */
 export function DesktopMemberPageEditor(props: MemberPageEditorProps) {
   const rootRef = useRef<HTMLElement>(null);

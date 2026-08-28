@@ -7,6 +7,7 @@ import { revalidatePath } from "next/cache";
 import type { MemberPageDocumentV2 } from "@/lib/members/v2/document";
 import {
   autosaveOwnedMemberPageDraftV2,
+  parsePublicationToken,
   publishOwnedMemberPageV2,
   resetOwnedMemberPageDraftV2,
   unpublishOwnedMemberPageV2,
@@ -27,6 +28,15 @@ export interface MemberPageV2PublishActionInput {
 
 export interface MemberPageV2UnpublishActionInput {
   slug: string;
+  /**
+   * Opaque publication token this editor loaded: the server-issued canonical
+   * UTC text form of the row's `published_at` boundary with the full Postgres
+   * precision preserved, or null for a page never published. The token is
+   * validated and passed through verbatim — never reinterpreted through a
+   * JavaScript `Date`, whose millisecond precision would make the guard
+   * reject this editor's own fresh generation as stale.
+   */
+  expectedPublishedAt: string | null;
 }
 
 export interface MemberPageV2ResetActionInput {
@@ -35,7 +45,7 @@ export interface MemberPageV2ResetActionInput {
 }
 
 export type MemberPageV2ActionFieldErrors = Partial<Record<
-  "slug" | "expectedDraftRev" | "document",
+  "slug" | "expectedDraftRev" | "expectedPublishedAt" | "document",
   string
 >>;
 
@@ -110,6 +120,11 @@ export type MemberPageV2UnpublishActionResult =
       fieldErrors: MemberPageV2ActionFieldErrors;
       slug: string;
       unpublishedAt: string;
+    }
+  | {
+      status: "conflict";
+      message: "This page was published again in another editor. Reload the editor before unpublishing.";
+      fieldErrors: MemberPageV2ActionFieldErrors;
     }
   | {
       status: "invalid";
@@ -275,15 +290,51 @@ function parseRevisionInput(
   };
 }
 
-function parseSlugInput(input: unknown): ParsedInput<{ slug: string }> {
-  if (!isPlainObject(input) || !hasExactKeys(input, ["slug"])) {
+/**
+ * The token is opaque and server-issued; it is checked for shape and passed
+ * through verbatim so the exact stored instant reaches the unpublish guard.
+ * Reformatting it here (e.g. through a JavaScript `Date`) would drop the
+ * microseconds the guard must match.
+ */
+function parseExpectedPublishedAt(value: unknown): ParsedInput<string | null> {
+  const token = parsePublicationToken(value);
+  return token === undefined
+    ? {
+        success: false,
+        fieldErrors: {
+          expectedPublishedAt: "Reload the editor and try again.",
+        },
+      }
+    : { success: true, data: token };
+}
+
+function parseUnpublishInput(
+  input: unknown,
+): ParsedInput<{ slug: string; expectedPublishedAt: string | null }> {
+  if (
+    !isPlainObject(input) ||
+    !hasExactKeys(input, ["slug", "expectedPublishedAt"])
+  ) {
     return { success: false, fieldErrors: {} };
   }
 
   const slug = parseSlug(input.slug);
-  return slug.success
-    ? { success: true, data: { slug: slug.data } }
-    : slug;
+  const expectedPublishedAt = parseExpectedPublishedAt(
+    input.expectedPublishedAt,
+  );
+  if (!slug.success || !expectedPublishedAt.success) {
+    return {
+      success: false,
+      fieldErrors: mergeFieldErrors(slug, expectedPublishedAt),
+    };
+  }
+  return {
+    success: true,
+    data: {
+      slug: slug.data,
+      expectedPublishedAt: expectedPublishedAt.data,
+    },
+  };
 }
 
 function revalidateMemberPublicSurfaces(slug: string): void {
@@ -414,7 +465,7 @@ export async function publishMemberPageV2Action(
 export async function unpublishMemberPageV2Action(
   input: MemberPageV2UnpublishActionInput,
 ): Promise<MemberPageV2UnpublishActionResult> {
-  const parsed = parseSlugInput(input);
+  const parsed = parseUnpublishInput(input);
   if (!parsed.success) {
     return {
       status: "invalid",
@@ -423,7 +474,10 @@ export async function unpublishMemberPageV2Action(
     };
   }
 
-  const result = await unpublishOwnedMemberPageV2(parsed.data.slug);
+  const result = await unpublishOwnedMemberPageV2(
+    parsed.data.slug,
+    parsed.data.expectedPublishedAt,
+  );
   switch (result.status) {
     case "success":
       revalidateMemberPublicSurfaces(result.slug);
@@ -433,6 +487,13 @@ export async function unpublishMemberPageV2Action(
         fieldErrors: {},
         slug: result.slug,
         unpublishedAt: result.unpublishedAt,
+      };
+    case "conflict":
+      return {
+        status: "conflict",
+        message:
+          "This page was published again in another editor. Reload the editor before unpublishing.",
+        fieldErrors: {},
       };
     case "invalid":
       return {

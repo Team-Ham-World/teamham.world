@@ -12,6 +12,13 @@ export function MemberPageV2Gallery({
   block,
   assetMetadata,
 }: MemberPageV2GalleryProps) {
+  // A degraded asset must not leave a caption-only shell behind: omit the item
+  // entirely, and omit the whole gallery when nothing renderable remains.
+  const items = block.items.filter((item) =>
+    assetMetadata.has(item.image.assetId),
+  );
+  if (items.length === 0) return null;
+
   return (
     <section aria-labelledby={`gallery-${block.id}`}>
       <h2
@@ -23,7 +30,7 @@ export function MemberPageV2Gallery({
 
       {block.variant === "grid" ? (
         <div className="mt-4 grid grid-cols-1 gap-6 sm:grid-cols-2">
-          {block.items.map((item) => (
+          {items.map((item) => (
             <figure key={item.id} className="card-tilt">
               <MemberPageV2Image
                 imageRef={item.image}
@@ -40,7 +47,7 @@ export function MemberPageV2Gallery({
         </div>
       ) : (
         <div className="mt-4 space-y-6">
-          {block.items.map((item) => (
+          {items.map((item) => (
             <figure key={item.id} className="card-tilt max-w-3xl">
               <MemberPageV2Image
                 imageRef={item.image}

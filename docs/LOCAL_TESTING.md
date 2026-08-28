@@ -246,6 +246,94 @@ npm run storage:local:verify
 Then verify sign-in, `/admin/members`, the target member editor, upload preparation,
 asset placement, publication, and the signed-out public member page in a browser.
 
+## Browser E2E suite (Playwright)
+
+A small Playwright suite in `tests/e2e/` drives the real V2 member-page editor
+in Chromium against the same local stack described above. It seeds a real
+account, session, member page, and V2 draft into the disposable database and
+sets the real `__Host-session` cookie. There is no authentication bypass, no
+application-only test route, and no shared production credential. Tests skip
+with a message naming the missing service; they never fake a pass.
+
+`test:e2e:vps` probes the app origin before it touches anything else and
+exits nonzero when nothing answers there, so a core app outage can never
+produce a green, all-skipped run. Only local MinIO absence remains a skip,
+and only for the asset-upload test.
+
+Install dependencies and the browser binary separately (the suite never
+downloads a browser on its own):
+
+```bash
+npm install
+npm run test:e2e:browsers
+```
+
+Start the full stack in one terminal:
+
+```bash
+npm run dev:vps
+```
+
+Then run the suite in another terminal:
+
+```bash
+npm run test:e2e:vps
+```
+
+`test:e2e:vps` opens the guarded loopback SSH tunnel, exports the validated
+disposable database URLs (`E2E_DATABASE_URL` for the runtime role, and
+`E2E_DATABASE_OWNER_URL` used only to delete fixture rows deterministically),
+and runs `playwright test`. `npm run test:e2e` runs Playwright directly for
+any already-exported environment. The base URL defaults to
+`https://localhost:3000` and can be overridden with `E2E_BASE_URL`; both the
+base URL and both database URLs are refused unless they are loopback and, for
+the database, a disposable database name with `ALLOW_LOCAL_DB_TESTS=1`.
+
+Covered today:
+
+1. Owner edit, autosave to Saved, Preview, Publish, signed-out public render.
+2. Two-tab revision conflict: the losing tab keeps its local version, offers
+   "Open latest draft in a new tab", keeps the destructive reload labeled,
+   stops autosaving, and blocks publish.
+3. Keyboard and pointer block reorder, and the sub-breakpoint editor
+   requirement notice returning to the live editor after resizing.
+4. Asset upload, finalize, select as portrait, publish, anonymous asset
+   access, and unpublish revocation — only when local MinIO is answering
+   (Docker required). Before the browser uploads image bytes, the suite
+   checks the server-issued upload URL against the approved local storage
+   origin (HTTPS loopback only) so bytes are never sent anywhere else.
+
+The fixture cleans up after itself whether a test passes or fails: it deletes
+the rows it seeded through its own account identity (never through the page
+slug alone), and it deletes the uploaded object bytes for the storage objects
+it owns from the local MinIO bucket. If those bytes cannot be removed, the
+run fails with a cleanup error naming the unremoved object keys instead of
+silently orphaning them.
+
+Unpublish is exercised from the same tab that published. The suite requires
+the editor to report success and then requires a fresh anonymous page request
+and asset request to return 404; a publication-generation conflict is a test
+failure, not an accepted outcome.
+
+Failed runs keep traces and screenshots under
+`$(os temp dir)/teamham-e2e-artifacts/` so the repository stays clean.
+
+CI runs this suite in the `validate` job of `.github/workflows/ci.yml`. That
+job already provides the disposable `neondb` Postgres service and applies the
+migrations through the PostgreSQL integration step; the browser steps then
+reuse the same local stack documented above: MinIO through `npm run
+storage:local` (which also generates the HTTPS localhost certificate) and
+Next.js development HTTPS with synthetic development-mode configuration
+(`AUTH_MODE=development`, synthetic Discord OAuth values, the V2 cohort
+variables, and the local R2 adapter). Both services must answer before the
+suite runs, and named-requirement skips are not permitted in CI: a run that
+reports missing requirements or skipped tests fails. Failed runs upload the
+`/tmp/teamham-e2e-artifacts` traces and screenshots, and cleanup of the dev
+server and MinIO always runs. The local VPS workflow documented above remains
+the way to run the suite during development; the manual checklist in the
+member-page editor troubleshooting runbook is a diagnostic fallback, not the
+only CI-adjacent evidence.
+
 ## Ports and overrides
 
 The defaults are:

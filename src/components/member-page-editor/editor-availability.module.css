@@ -3,12 +3,14 @@
 }
 
 /*
- * Match DESKTOP_EDITOR_MEDIA_QUERY exactly. Width alone would admit a large
- * tablet or a phone requesting a desktop viewport. The notice stays visible
- * until the browser has both the canvas space and desktop-style input needed
- * by drag-and-drop, hover chrome, and the three-region workbench.
+ * Match EDITOR_MINIMUM_MEDIA_QUERY exactly (use-editor-layout.ts). Width
+ * alone would admit a large tablet or a phone requesting a desktop viewport,
+ * and width alone would also strand the compact 64–80rem band behind a
+ * notice the editor has already outgrown. The notice stays visible until the
+ * browser has both the canvas space and desktop-style input needed by
+ * drag-and-drop and the hover-driven chrome.
  */
-@media (min-width: 80rem) and (hover: hover) and (pointer: fine) {
+@media (min-width: 64rem) and (hover: hover) and (pointer: fine) {
   .requirement {
     display: none;
   }

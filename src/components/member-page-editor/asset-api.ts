@@ -66,6 +66,13 @@ export type MemberAssetApiErrorCode =
   | "direct_upload_failed"
   | "invalid_response";
 
+/**
+ * Owner-only detail for `asset_referenced` failures: which stored document(s)
+ * still reference the asset. Mirrors the server classification without
+ * importing server-only modules. `null` means the server did not classify.
+ */
+export type MemberAssetReferenceLocation = "draft" | "published" | "both";
+
 const ERROR_MESSAGES: Record<MemberAssetApiErrorCode, string> = {
   invalid_request: "That image request was not valid. Refresh the library and try again.",
   invalid_request_origin: "This upload could not be verified. Reload the editor and try again.",
@@ -86,22 +93,53 @@ const ERROR_MESSAGES: Record<MemberAssetApiErrorCode, string> = {
   asset_conflict:
     "The image changed while this request was running. Refresh the library before trying again.",
   asset_referenced:
-    "This image is still used by the saved draft or live page. The server checks both versions: remove every use, let the draft save, and publish or unpublish that change as needed before trying again.",
+    "This image is still used by the saved draft or live page. The server checks the saved draft and the last published snapshot: remove every use, let the draft save, and publish the cleaned change before trying again.",
   direct_upload_failed:
     "The image could not reach storage. Check your connection and retry the upload.",
   invalid_response:
     "The image service returned an unexpected response. Refresh the editor before trying again.",
 };
 
+/**
+ * Owner-facing copy for a blocked deletion, named by where the reference
+ * lives. The copy must never claim that unpublishing clears the last
+ * published snapshot, and must never advise republishing a private or held
+ * page purely to free quota.
+ */
+export function assetReferenceMessage(
+  location: MemberAssetReferenceLocation | null,
+): string {
+  switch (location) {
+    case "draft":
+      return "This image is still used by the saved draft. The last published snapshot does not reference it. Remove every use of it in the editor, wait for the editor to report Saved, then try deleting again.";
+    case "published":
+      return "This image is still used by the last published snapshot, so deleting it would break the live page and Reset-to-live. Remove every use from the draft, wait for Saved, then publish the cleaned draft to replace the snapshot before deleting. Unpublishing alone does not clear the last published snapshot. If the page is private or on hold, keep the image instead of republishing just to free quota.";
+    case "both":
+      return "This image is still used by both the saved draft and the last published snapshot. Remove every use from the draft, wait for Saved, then publish the cleaned draft to replace the snapshot before deleting. Unpublishing alone does not clear the last published snapshot.";
+    default:
+      return ERROR_MESSAGES.asset_referenced;
+  }
+}
+
 export class MemberAssetApiError extends Error {
   readonly code: MemberAssetApiErrorCode;
   readonly status: number | null;
+  readonly referenceLocation: MemberAssetReferenceLocation | null;
 
-  constructor(code: MemberAssetApiErrorCode, status: number | null = null) {
-    super(ERROR_MESSAGES[code]);
+  constructor(
+    code: MemberAssetApiErrorCode,
+    status: number | null = null,
+    referenceLocation: MemberAssetReferenceLocation | null = null,
+  ) {
+    super(
+      code === "asset_referenced"
+        ? assetReferenceMessage(referenceLocation)
+        : ERROR_MESSAGES[code],
+    );
     this.name = "MemberAssetApiError";
     this.code = code;
     this.status = status;
+    this.referenceLocation = referenceLocation;
   }
 }
 
@@ -326,14 +364,29 @@ export async function uploadNormalizedMemberPageAsset(
 
 async function throwRouteError(response: Response): Promise<never> {
   const body = await readJson(response);
+  const knownShape =
+    isExactObject(body, ["error"]) ||
+    isExactObject(body, ["error", "referenceLocation"]);
   const code =
-    isExactObject(body, ["error"]) && typeof body.error === "string"
-      ? body.error
-      : "invalid_response";
+    knownShape && typeof body.error === "string" ? body.error : "invalid_response";
   if (isMemberAssetApiErrorCode(code)) {
-    throw new MemberAssetApiError(code, response.status);
+    throw new MemberAssetApiError(
+      code,
+      response.status,
+      code === "asset_referenced" && knownShape
+        ? parseReferenceLocation(body.referenceLocation)
+        : null,
+    );
   }
   throw new MemberAssetApiError("invalid_response", response.status);
+}
+
+function parseReferenceLocation(
+  value: unknown,
+): MemberAssetReferenceLocation | null {
+  return value === "draft" || value === "published" || value === "both"
+    ? value
+    : null;
 }
 
 async function fetchRoute(

@@ -63,6 +63,7 @@ vi.mock("@/lib/members/assets/dal", () => ({
   getPublishedMemberPageAssetMetadata: vi.fn(async () => ({
     status: "success",
     metadata: new Map(),
+    degradedAssetIds: new Set<string>(),
   })),
 }));
 
@@ -163,6 +164,7 @@ beforeEach(() => {
   vi.mocked(assetDal.getPublishedMemberPageAssetMetadata).mockResolvedValue({
     status: "success",
     metadata: new Map(),
+    degradedAssetIds: new Set<string>(),
   });
   setCohort({ cohort: false, editor: false });
   setPublishedV2(null);

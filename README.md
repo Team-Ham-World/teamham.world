@@ -54,7 +54,9 @@ produces those origin errors.
 The VPS test database is isolated from Neon and is not publicly exposed. See
 [`docs/LOCAL_TESTING.md`](docs/LOCAL_TESTING.md) for the complete local development,
 database, S3-compatible storage, reset, and troubleshooting workflow. VPS-specific
-operations remain in [`docs/VPS_TEST_DATABASE.md`](docs/VPS_TEST_DATABASE.md).
+operations remain in [`docs/VPS_TEST_DATABASE.md`](docs/VPS_TEST_DATABASE.md). Use
+[`docs/MEMBER_PAGE_EDITOR_TROUBLESHOOTING.md`](docs/MEMBER_PAGE_EDITOR_TROUBLESHOOTING.md)
+for member-page editor recovery steps and long-term fixes.
 
 ## Project Structure
 

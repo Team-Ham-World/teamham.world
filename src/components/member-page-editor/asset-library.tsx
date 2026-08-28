@@ -206,8 +206,8 @@ export function AssetLibrary({
 
   async function removeAsset(asset: EditorAsset): Promise<void> {
     const warning = referencedAssetIds.has(asset.assetId)
-      ? "This image appears in the current draft. The server checks both the saved draft and live page, and refuses deletion while either one still references it. Check anyway?"
-      : "Delete this stored image? The server will still refuse if the saved draft or live page references it.";
+      ? "This image appears in the current draft. The server checks both the saved draft and the last published snapshot, and refuses deletion while either one still references it. Check anyway?"
+      : "Delete this stored image? The server will still refuse if the saved draft or the last published snapshot references it.";
     if (!confirmDelete(warning)) return;
 
     setBusyAssetId(asset.assetId);
@@ -220,6 +220,9 @@ export function AssetLibrary({
       );
       setMessage("Stored image deleted. The page document was not changed.");
     } catch (deleteError) {
+      // MemberAssetApiError builds asset_referenced copy from the server's
+      // reference classification (draft / published / both), so the plain
+      // message already names the last published snapshot when relevant.
       setError(errorMessage(deleteError));
       setMessage("The stored image was not deleted.");
     } finally {

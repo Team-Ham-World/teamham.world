@@ -123,6 +123,104 @@ describe("legacy member content to V2 conversion", () => {
     }]);
   });
 
+  it("carries a complete non-decorative artwork reference through verbatim", () => {
+    const carriedArtwork = {
+      assetId: importedAssetId,
+      alt: "Imported Weekend Thing artwork",
+      decorative: false,
+    };
+    const doc = legacyToDoc({
+      ...BASE,
+      showcase: {
+        kind: "external",
+        name: "Weekend Thing renamed",
+        shortDescription: "Made over a weekend.",
+        type: "tool",
+        status: "released",
+        imageUrl: "https://remote.example/artwork.png",
+      },
+    }, {
+      ids: ids("featured-external"),
+      externalArtwork: carriedArtwork,
+    });
+
+    // The existing alt text is accessibility content: a legacy save must not
+    // regenerate it from the project name.
+    expect(doc.blocks).toEqual([{
+      id: "featured-external",
+      type: "featuredProject",
+      variant: "card",
+      project: {
+        kind: "external",
+        name: "Weekend Thing renamed",
+        shortDescription: "Made over a weekend.",
+        type: "tool",
+        status: "released",
+        artwork: {
+          assetId: importedAssetId,
+          alt: "Imported Weekend Thing artwork",
+          decorative: false,
+        },
+      },
+    }]);
+    expect(parseMemberPageDocumentV2(doc).success).toBe(true);
+  });
+
+  it("rejects carried artwork with V2-only decorative state", () => {
+    expect(() => legacyToDoc({
+      ...BASE,
+      showcase: {
+        kind: "external",
+        name: "Weekend Thing",
+        shortDescription: "Made over a weekend.",
+        type: "tool",
+        status: "released",
+      },
+    }, {
+      ids: ids("unused"),
+      externalArtwork: {
+        assetId: importedAssetId,
+        alt: null,
+        decorative: true,
+      },
+    })).toThrow(TypeError);
+  });
+
+  it("rejects carried artwork for a non-external showcase", () => {
+    expect(() => legacyToDoc({
+      ...BASE,
+      showcase: { kind: "project", projectSlug: "untitled-quiz-show" },
+    }, {
+      ids: ids("unused"),
+      externalArtwork: {
+        assetId: importedAssetId,
+        alt: "Imported Weekend Thing artwork",
+        decorative: false,
+      },
+    })).toThrow(TypeError);
+  });
+
+  it("rejects supplying carried artwork together with a bare asset ID", () => {
+    expect(() => legacyToDoc({
+      ...BASE,
+      showcase: {
+        kind: "external",
+        name: "Weekend Thing",
+        shortDescription: "Made over a weekend.",
+        type: "tool",
+        status: "released",
+      },
+    }, {
+      ids: ids("unused"),
+      externalArtworkAssetId: importedAssetId,
+      externalArtwork: {
+        assetId: importedAssetId,
+        alt: "Imported Weekend Thing artwork",
+        decorative: false,
+      },
+    })).toThrow(TypeError);
+  });
+
   it("preserves all supported social links and clones their object", () => {
     const socialLinks = {
       github: "https://github.com/hamfriend",

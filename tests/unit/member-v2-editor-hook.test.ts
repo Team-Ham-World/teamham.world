@@ -158,6 +158,13 @@ import {
 } from "../fixtures/member-v2/documents";
 
 const ACTION_TIME = "2026-08-25T00:00:00.000Z";
+const GENERATION_ONE = "2026-08-20T09:00:00.000Z";
+/**
+ * A token as the server issues it: full Postgres microsecond precision. The
+ * hook must store and echo it verbatim — any normalization through a
+ * JavaScript `Date` would truncate it and make unpublish reject stale.
+ */
+const ISSUED_TOKEN = "2026-08-21T09:00:00.123456Z";
 
 type AutosaveActionResult = Awaited<
   ReturnType<MemberEditorActions["autosave"]>
@@ -189,7 +196,7 @@ function publishedResult(
     fieldErrors: {},
     slug: "hamfriend",
     draftRev,
-    publishedAt: ACTION_TIME,
+    publishedAt: ISSUED_TOKEN,
   };
 }
 
@@ -367,6 +374,112 @@ describe("member page editor lifecycle and transitions", () => {
       hasPendingWork: true,
     });
     expect(after.publicationMessage).toBe("Conflict detected.");
+  });
+
+  it("unpublishes with the publication generation it loaded", async () => {
+    const unpublish = vi.fn(async () => unpublishedResult());
+    const actions = createActions({ unpublish });
+    const options = createOptions(actions, { initialIsPublished: true });
+
+    const editor = renderEditor(options);
+    expect(editor.publicationToken).toBeNull();
+    const result = await editor.unpublish();
+
+    expect(result.status).toBe("unpublished");
+    expect(unpublish).toHaveBeenCalledWith({
+      slug: "hamfriend",
+      expectedPublishedAt: null,
+    });
+    const after = renderEditor(options);
+    expect(after.isPublished).toBe(false);
+    expect(after.publicationToken).toBeNull();
+  });
+
+  it("sends the refreshed publication token after a successful publish", async () => {
+    const publish = vi.fn(async () => publishedResult(2));
+    const unpublish = vi.fn(async () => unpublishedResult());
+    const actions = createActions({
+      publish,
+      unpublish,
+      initialPublishedAt: GENERATION_ONE,
+    });
+    const options = createOptions(actions);
+
+    const editor = renderEditor(options);
+    expect(editor.publicationToken).toBe(GENERATION_ONE);
+    await editor.publish();
+
+    // The server-issued token (microsecond precision included) is stored and
+    // echoed back untouched.
+    const after = renderEditor(options);
+    expect(after.publicationToken).toBe(ISSUED_TOKEN);
+    await after.unpublish();
+    expect(unpublish).toHaveBeenCalledWith({
+      slug: "hamfriend",
+      expectedPublishedAt: ISSUED_TOKEN,
+    });
+  });
+
+  it("keeps the page live and the token untouched when unpublish conflicts", async () => {
+    const unpublish = vi.fn(async () => ({
+      status: "conflict" as const,
+      message:
+        "This page was published again in another editor. Reload the editor before unpublishing." as const,
+      fieldErrors: {},
+    }));
+    const actions = createActions({
+      unpublish,
+      initialPublishedAt: GENERATION_ONE,
+    });
+    const options = createOptions(actions, { initialIsPublished: true });
+
+    const editor = renderEditor(options);
+    const result = await editor.unpublish();
+
+    expect(result.status).toBe("conflict");
+    expect(unpublish).toHaveBeenCalledWith({
+      slug: "hamfriend",
+      expectedPublishedAt: GENERATION_ONE,
+    });
+    const after = renderEditor(options);
+    expect(after.isPublished).toBe(true);
+    expect(after.publicationToken).toBe(GENERATION_ONE);
+    expect(after.publicationMessage).toMatch(/published again in another editor/u);
+
+    await after.unpublish();
+    expect(unpublish).toHaveBeenLastCalledWith({
+      slug: "hamfriend",
+      expectedPublishedAt: GENERATION_ONE,
+    });
+  });
+
+  it("does not let a private draft autosave invalidate the publication token", async () => {
+    const autosave = vi.fn(
+      async ({ expectedDraftRev }: Parameters<MemberEditorActions["autosave"]>[0]) =>
+        savedResult(expectedDraftRev + 1),
+    );
+    const unpublish = vi.fn(async () => unpublishedResult());
+    const actions = createActions({
+      autosave,
+      unpublish,
+      initialPublishedAt: GENERATION_ONE,
+    });
+    const options = createOptions(actions, { initialIsPublished: true });
+
+    const editor = renderEditor(options);
+    editor.updateFrameFields({ displayName: "Private edit" });
+    await vi.advanceTimersByTimeAsync(800);
+
+    const saved = renderEditor(options);
+    expect(saved.status.state).toBe("saved");
+    expect(saved.publicationToken).toBe(GENERATION_ONE);
+
+    const result = await saved.unpublish();
+    expect(result.status).toBe("unpublished");
+    expect(unpublish).toHaveBeenCalledWith({
+      slug: "hamfriend",
+      expectedPublishedAt: GENERATION_ONE,
+    });
   });
 
   it("keeps a curated theme change in the draft until explicit publish", async () => {

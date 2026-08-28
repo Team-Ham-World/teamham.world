@@ -1,5 +1,4 @@
 import type {
-  FeaturedProjectBlock,
   MemberPageDocumentV2,
 } from "@/lib/members/v2/document";
 import type { ResolvedMemberThemeAccent } from "@/lib/members/v2/themes";
@@ -9,6 +8,7 @@ import { MemberPageV2Body } from "./blocks/MemberPageV2Body";
 import { MemberPageV2FeaturedProject } from "./blocks/MemberPageV2FeaturedProject";
 import { MemberPageThemeStyle } from "./MemberPageThemeStyle";
 import { memberThemeStyle } from "./member-theme-presentation";
+import { composeMemberPageV2Layout } from "./page-composition";
 import styles from "./MemberPageV2View.module.css";
 
 export interface AssetMetadata {
@@ -35,12 +35,8 @@ export function MemberPageV2View({
   theme,
   assetMetadata,
 }: MemberPageV2ViewProps) {
-  const showcaseProject = getShowcaseProject(document);
-
-  // The showcase holds the first slot, so the rest of the blocks are the body.
-  const bodyBlocks = showcaseProject
-    ? document.blocks.slice(1)
-    : document.blocks;
+  const { layout, showcaseProject, bodyBlocks } =
+    composeMemberPageV2Layout(document);
 
   return (
     <div
@@ -49,7 +45,7 @@ export function MemberPageV2View({
       data-theme-scope="page"
       data-theme-id={theme.themeId}
       data-accent-id={theme.accentId}
-      data-member-layout={showcaseProject ? "showcase" : "blocks"}
+      data-member-layout={layout}
       style={memberThemeStyle(theme)}
     >
       <MemberPageThemeStyle theme={theme} />
@@ -81,20 +77,4 @@ export function MemberPageV2View({
   );
 }
 
-/**
- * The showcase slot: a featured project standing beside the profile.
- *
- * The slot belongs to whatever is at the top of the document, so a member who
- * adds more blocks keeps their project next to their name instead of watching
- * it drop to the foot of the page, and moving something else to the front is
- * what gives the slot up. It is deliberately independent of the theme: which
- * palette and stock a page wears has nothing to do with where its project
- * sits, and tying the two meant switching theme quietly rearranged the page.
- */
-export function getShowcaseProject(
-  document: MemberPageDocumentV2,
-): FeaturedProjectBlock | null {
-  const [block] = document.blocks;
-  if (!block) return null;
-  return block.type === "featuredProject" ? block : null;
-}
+export { getShowcaseProject } from "./page-composition";

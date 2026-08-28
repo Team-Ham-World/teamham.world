@@ -91,3 +91,133 @@ jobs:
             cat "$LOG_FILE"
             exit 1
           fi
+
+      # Browser E2E for the member-page V2 editor (tests/e2e/, playwright.config.ts).
+      # Runs after the PostgreSQL integration step above, which leaves the
+      # disposable `neondb` migrated (0001-0008) with app_runtime_role provisioned.
+      - name: Install Playwright Chromium browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Start local MinIO and bootstrap bucket
+        # scripts/start-local-s3.sh also generates the HTTPS localhost
+        # certificate (certificates/localhost.pem, -key.pem, rootCA.pem)
+        # shared by Next and MinIO.
+        run: npm run storage:local
+
+      - name: Start Next.js development HTTPS server
+        env:
+          AUTH_MODE: development
+          APP_BASE_URL: https://localhost:3000
+          OAUTH_STATE_HMAC_SECRET: "0000000000000000000000000000000000000000000000000000000000000000"
+          GAME_AUTH_REQUEST_HMAC_SECRET: "1111111111111111111111111111111111111111111111111111111111111111"
+          DISCORD_CLIENT_ID: "123456789012345678"
+          DISCORD_CLIENT_SECRET: ci
+          DISCORD_GUILD_ID: "234567890123456789"
+          DISCORD_REQUIRED_ROLE_ID: "345678901234567890"
+          DATABASE_URL: postgresql://app_runtime_role:test_only_runtime_secret_password_12345@127.0.0.1:5432/neondb?sslmode=disable
+          MEMBER_PAGE_V2_ALLOWLIST: all
+          MEMBER_PAGE_V2_EDITOR_DISABLED: "false"
+          MEMBER_PAGE_R2_ENVIRONMENT: nonproduction
+          MEMBER_PAGE_R2_ACCOUNT_ID: "00000000000000000000000000000000"
+          MEMBER_PAGE_R2_ACCESS_KEY_ID: teamhamlocalaccess
+          MEMBER_PAGE_R2_SECRET_ACCESS_KEY: teamham-local-secret-key-12345678901234567890
+          MEMBER_PAGE_R2_BUCKET: teamham-member-assets-local
+          MEMBER_PAGE_R2_ENDPOINT: https://localhost:9000
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/certificates/rootCA.pem
+        run: |
+          node_modules/.bin/next dev \
+            --experimental-https \
+            --experimental-https-key ./certificates/localhost-key.pem \
+            --experimental-https-cert ./certificates/localhost.pem \
+            --experimental-https-ca ./certificates/rootCA.pem \
+            > /tmp/teamham-next-dev.log 2>&1 &
+          echo $! > /tmp/teamham-next-dev.pid
+
+      - name: Wait for app and storage to answer
+        run: |
+          app_ok=0
+          for _ in $(seq 1 60); do
+            if curl --silent --show-error --cacert certificates/rootCA.pem \
+              https://localhost:3000/ > /dev/null; then
+              app_ok=1
+              break
+            fi
+            sleep 2
+          done
+          storage_ok=0
+          for _ in $(seq 1 60); do
+            if curl --fail --silent --show-error --cacert certificates/rootCA.pem \
+              https://localhost:9000/minio/health/live > /dev/null; then
+              storage_ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$app_ok" != "1" ]; then
+            echo "App did not answer at https://localhost:3000. Server output:"
+            cat /tmp/teamham-next-dev.log
+            exit 1
+          fi
+          if [ "$storage_ok" != "1" ]; then
+            echo "MinIO did not answer at https://localhost:9000/minio/health/live."
+            exit 1
+          fi
+
+      - name: Run member-page browser E2E suite
+        env:
+          AUTH_MODE: development
+          APP_BASE_URL: https://localhost:3000
+          OAUTH_STATE_HMAC_SECRET: "0000000000000000000000000000000000000000000000000000000000000000"
+          GAME_AUTH_REQUEST_HMAC_SECRET: "1111111111111111111111111111111111111111111111111111111111111111"
+          DISCORD_CLIENT_ID: "123456789012345678"
+          DISCORD_CLIENT_SECRET: ci
+          DISCORD_GUILD_ID: "234567890123456789"
+          DISCORD_REQUIRED_ROLE_ID: "345678901234567890"
+          DATABASE_URL: postgresql://app_runtime_role:test_only_runtime_secret_password_12345@127.0.0.1:5432/neondb?sslmode=disable
+          MEMBER_PAGE_V2_ALLOWLIST: all
+          MEMBER_PAGE_V2_EDITOR_DISABLED: "false"
+          MEMBER_PAGE_R2_ENVIRONMENT: nonproduction
+          MEMBER_PAGE_R2_ACCOUNT_ID: "00000000000000000000000000000000"
+          MEMBER_PAGE_R2_ACCESS_KEY_ID: teamhamlocalaccess
+          MEMBER_PAGE_R2_SECRET_ACCESS_KEY: teamham-local-secret-key-12345678901234567890
+          MEMBER_PAGE_R2_BUCKET: teamham-member-assets-local
+          MEMBER_PAGE_R2_ENDPOINT: https://localhost:9000
+          NODE_EXTRA_CA_CERTS: ${{ github.workspace }}/certificates/rootCA.pem
+          E2E_BASE_URL: https://localhost:3000
+          E2E_STORAGE_URL: https://localhost:9000
+          E2E_DATABASE_URL: postgres://app_runtime_role:test_only_runtime_secret_password_12345@127.0.0.1:5432/neondb
+          E2E_DATABASE_OWNER_URL: postgres://neondb_owner:synthetic_ci_password_12345@127.0.0.1:5432/neondb
+          ALLOW_LOCAL_DB_TESTS: "1"
+        run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee /tmp/teamham-e2e-output.log
+          status=$?
+          # The requirement reporter only prints; it never fails the run. CI
+          # must not permit named requirement skips, so fail on the reporter's
+          # marker or on any skipped count in the summary.
+          if grep -q "\[e2e requirements\]" /tmp/teamham-e2e-output.log; then
+            echo "::error::The browser E2E suite reported missing named requirements; CI does not permit requirement skips."
+            status=1
+          fi
+          if grep -Eq "[0-9]+ skipped" /tmp/teamham-e2e-output.log; then
+            echo "::error::The browser E2E suite skipped tests; CI does not permit requirement skips."
+            status=1
+          fi
+          exit "$status"
+
+      - name: Stop Next.js development server and local MinIO
+        if: always()
+        run: |
+          if [ -f /tmp/teamham-next-dev.pid ]; then
+            kill -TERM "$(cat /tmp/teamham-next-dev.pid)" 2>/dev/null || true
+            rm -f /tmp/teamham-next-dev.pid
+          fi
+          docker compose -f infra/local-s3/compose.yaml down --remove-orphans || true
+
+      - name: Upload browser E2E artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: teamham-e2e-artifacts
+          path: /tmp/teamham-e2e-artifacts/
+          if-no-files-found: ignore

@@ -53,6 +53,13 @@ export interface MemberEditorActions {
   reset: (
     input: MemberPageV2ResetActionInput,
   ) => Promise<MemberPageV2ResetActionResult>;
+  /**
+   * Publication generation this editor loaded with: the server-issued
+   * `publishedAt` boundary value, or null when the page has never been
+   * published. The mount threads it through the actions object because that
+   * is the one serializable channel from the server boundary to this hook.
+   */
+  initialPublishedAt?: string | null;
 }
 
 export type MemberPageEditorPublishResult =
@@ -104,6 +111,15 @@ export function useMemberPageEditor(options: UseMemberPageEditorOptions) {
 
   const [document, setDocument] = useState(options.initialDocument);
   const [isPublished, setIsPublished] = useState(options.initialIsPublished);
+  /**
+   * The publication generation this tab may act on. Publish replaces it with
+   * the new server-issued instant and unpublish clears it, so a tab that
+   * missed another tab's publish sends a stale token and the server refuses
+   * with a typed conflict instead of taking the newer page down.
+   */
+  const [publicationToken, setPublicationToken] = useState<string | null>(
+    options.actions.initialPublishedAt ?? null,
+  );
   const [hasPublishedSnapshot, setHasPublishedSnapshot] = useState(
     options.initialHasPublishedSnapshot,
   );
@@ -211,6 +227,7 @@ export function useMemberPageEditor(options: UseMemberPageEditorOptions) {
     undoable,
     selectedBlockId,
     isPublished,
+    publicationToken,
     hasPublishedSnapshot,
     moderationHold: options.initialModerationHold,
 
@@ -318,6 +335,7 @@ export function useMemberPageEditor(options: UseMemberPageEditorOptions) {
         if (result.status === "published") {
           setIsPublished(true);
           setHasPublishedSnapshot(true);
+          setPublicationToken(result.publishedAt);
           setPublicationMessage("Published. Your page is live.");
           return result;
         }
@@ -339,9 +357,13 @@ export function useMemberPageEditor(options: UseMemberPageEditorOptions) {
       setBusy("unpublish");
       setPublicationMessage("");
       try {
-        const result = await options.actions.unpublish({ slug: options.slug });
+        const result = await options.actions.unpublish({
+          slug: options.slug,
+          expectedPublishedAt: publicationToken,
+        });
         if (result.status === "unpublished") {
           setIsPublished(false);
+          setPublicationToken(null);
           setPublicationMessage("Unpublished. Only you can see this page now.");
         } else {
           setPublicationMessage(result.message);

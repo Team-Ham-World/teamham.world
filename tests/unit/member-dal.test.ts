@@ -386,7 +386,11 @@ describe("member data access authorization", () => {
         project: {
           kind: "external",
           name: "Weekend Thing renamed",
-          artwork: { assetId: IMPORTED_ARTWORK_ASSET_ID },
+          artwork: {
+            assetId: IMPORTED_ARTWORK_ASSET_ID,
+            alt: "Imported Weekend Thing artwork",
+            decorative: false,
+          },
         },
       }],
     });
@@ -428,9 +432,11 @@ describe("member data access authorization", () => {
     expect(values).toContainEqual(expect.objectContaining({
       blocks: [expect.objectContaining({
         project: expect.objectContaining({
-          artwork: expect.objectContaining({
+          artwork: {
             assetId: IMPORTED_ARTWORK_ASSET_ID,
-          }),
+            alt: "Imported Weekend Thing artwork",
+            decorative: false,
+          },
         }),
       })],
     }));
@@ -463,9 +469,11 @@ describe("member data access authorization", () => {
     expect(values).toContainEqual(expect.objectContaining({
       blocks: [expect.objectContaining({
         project: expect.objectContaining({
-          artwork: expect.objectContaining({
+          artwork: {
             assetId: IMPORTED_ARTWORK_ASSET_ID,
-          }),
+            alt: "Imported Weekend Thing artwork",
+            decorative: false,
+          },
         }),
       })],
     }));
@@ -721,7 +729,10 @@ describe("member data access authorization", () => {
 
     const lookupSql = mocks.query.mock.calls[0][0].join("?");
     const publicationSql = mocks.query.mock.calls[1][0].join("?");
-    expect(lookupSql).not.toContain("draft_doc");
+    // The lookup now fetches both stored documents for the legacy
+    // representability guard; artwork verification itself stays in SQL.
+    expect(lookupSql).toContain("draft_doc");
+    expect(lookupSql).toContain("published_doc");
     expect(publicationSql).toContain("'artwork', CASE");
     expect(publicationSql).toContain("asset.member_page_id = member_pages.id");
     expect(publicationSql).toContain("asset.status = 'ready'");

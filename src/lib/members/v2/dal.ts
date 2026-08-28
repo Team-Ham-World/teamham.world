@@ -13,6 +13,7 @@ import {
   MEMBER_PAGE_AUTOSAVE_RATE_LIMIT,
   MEMBER_PAGE_PUBLISH_RATE_LIMIT,
 } from "@/lib/members/v2/rate-limits";
+import { classifyThemeAccentPairForWrite } from "@/lib/members/v2/themes";
 import { parseMemberPageDocumentV2 } from "@/lib/members/v2/validation";
 
 interface OwnedDraftRow {
@@ -104,6 +105,7 @@ export type MemberPageV2UnpublishResult =
       unpublishedAt: string;
     }
   | { status: "not-found-or-forbidden" }
+  | { status: "conflict" }
   | { status: "invalid" };
 
 export type MemberPageV2ResetResult =
@@ -151,6 +153,52 @@ function parseNullableTimestamp(value: unknown): string | null | undefined {
   return parseTimestamp(value) ?? undefined;
 }
 
+/**
+ * Canonical shape of the opaque publication token: UTC ISO-8601 with a
+ * one-to-six-digit fraction. The issued form always carries the full six
+ * digits (e.g. `2026-08-20T09:00:00.123456Z`); shorter fractions are accepted
+ * verbatim for tokens issued before the precision fix.
+ */
+const PUBLICATION_TOKEN_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(\.\d{1,6})?Z$/u;
+
+const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+function isRealCalendarDay(year: number, month: number, day: number): boolean {
+  if (month < 1 || month > 12 || day < 1) return false;
+  let days = DAYS_IN_MONTH[month - 1];
+  if (month === 2 && ((year % 4 === 0 && year % 100 !== 0) || year % 400 === 0)) {
+    days = 29;
+  }
+  return day <= days;
+}
+
+/**
+ * Validates a publication token without reinterpreting it.
+ *
+ * The token is an opaque server-issued value that must preserve the full
+ * Postgres `timestamptz` precision (microseconds) from its issuing query,
+ * across the editor, and back through the unpublish guard. It is therefore
+ * passed through verbatim: normalizing it through a JavaScript `Date` would
+ * truncate the fraction to milliseconds and make the guard reject the very
+ * generation it just issued. Calendar validity is checked exactly rather than
+ * with a `Date` probe, because `Date` parsing silently rolls impossible days
+ * (e.g. `2026-02-30`) forward instead of rejecting them, and Postgres' cast
+ * would throw instead of failing closed as `invalid`.
+ */
+export function parsePublicationToken(
+  value: unknown,
+): string | null | undefined {
+  if (value === null) return null;
+  if (typeof value !== "string") return undefined;
+  const match = PUBLICATION_TOKEN_PATTERN.exec(value);
+  if (!match) return undefined;
+  const [, year, month, day] = match;
+  return isRealCalendarDay(Number(year), Number(month), Number(day))
+    ? value
+    : undefined;
+}
+
 async function authorizeEditorRequest(slugInput: unknown): Promise<
   | { status: "success"; slug: string; accountId: string }
   | { status: "not-found-or-forbidden" }
@@ -171,7 +219,10 @@ function parseOwnedDraft(row: OwnedDraftRow): OwnedMemberPageDraftV2 | null {
   const draft = parseMemberPageDocumentV2(row.draft_doc);
   const draftRev = parseRevision(row.draft_rev);
   const draftUpdatedAt = parseTimestamp(row.draft_updated_at);
-  const publishedAt = parseNullableTimestamp(row.published_at);
+  // The publication token is projected as text in SQL (see the draft read)
+  // and must keep its full precision; it is the unpublish guard's identity
+  // for the loaded publication generation.
+  const publishedAt = parsePublicationToken(row.published_at);
   const unpublishedAt = parseNullableTimestamp(row.unpublished_at);
   if (
     typeof row.id !== "string" ||
@@ -255,7 +306,10 @@ export async function getOwnedMemberPageDraftV2(
       moderation_hold,
       (published_doc IS NOT NULL) AS has_published_snapshot,
       draft_updated_at,
-      published_at,
+      to_char(
+        published_at AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+      ) AS published_at,
       unpublished_at
     FROM public.member_pages
     WHERE slug = ${authorization.slug}
@@ -284,6 +338,22 @@ export async function autosaveOwnedMemberPageDraftV2(
   if (expectedDraftRev === null || !document.success) {
     return { status: "invalid" };
   }
+
+  // Write-boundary acceptance, deliberately narrower than the read/render
+  // acceptance above: an active pair may be newly selected; a legacy pair may
+  // be autosaved only when it exactly equals the pair already stored on the
+  // draft (enforced inside the guarded statement below, so the check stays
+  // atomic with the write and cannot race a concurrent autosave); revoked or
+  // unknown pairs never reach a write.
+  const themeWrite = classifyThemeAccentPairForWrite(
+    document.doc.frame.theme.id,
+    document.doc.frame.theme.accentId,
+  );
+  if (themeWrite.kind === "rejected") return { status: "invalid" };
+  const themePairJson = JSON.stringify({
+    id: document.doc.frame.theme.id,
+    accentId: document.doc.frame.theme.accentId,
+  });
 
   const assetIds = extractMemberPageAssetIds(document.doc);
   const assetIdsJson = JSON.stringify(assetIds);
@@ -326,7 +396,7 @@ export async function autosaveOwnedMemberPageDraftV2(
       RETURNING member_page_id
     ),
     target AS MATERIALIZED (
-      SELECT page.id, page.draft_rev
+      SELECT page.id, page.draft_doc, page.draft_rev
       FROM public.member_pages page
       JOIN owned_page ON owned_page.id = page.id
       JOIN mutation_rate ON mutation_rate.member_page_id = page.id
@@ -356,6 +426,10 @@ export async function autosaveOwnedMemberPageDraftV2(
         AND page.slug = ${authorization.slug}
         AND page.owner_account_id = ${authorization.accountId}
         AND page.draft_rev = ${expectedDraftRev}
+        AND (
+          ${themeWrite.kind}::text = 'selectable'
+          OR page.draft_doc->'frame'->'theme' IS NOT DISTINCT FROM ${themePairJson}::jsonb
+        )
         AND (SELECT COUNT(*) FROM matched_assets) = ${assetIds.length}
       RETURNING page.draft_rev, page.draft_updated_at
     )
@@ -368,6 +442,9 @@ export async function autosaveOwnedMemberPageDraftV2(
     SELECT
       CASE
         WHEN target.draft_rev <> ${expectedDraftRev} THEN 'conflict'
+        WHEN ${themeWrite.kind}::text <> 'selectable'
+          AND target.draft_doc->'frame'->'theme' IS DISTINCT FROM ${themePairJson}::jsonb
+          THEN 'invalid'
         WHEN (SELECT COUNT(*) FROM matched_assets) <> ${assetIds.length}
           THEN 'invalid'
         ELSE 'conflict'
@@ -523,7 +600,10 @@ export async function publishOwnedMemberPageV2(
       'success'::text AS outcome,
       updated.slug,
       updated.draft_rev,
-      updated.published_at
+      to_char(
+        updated.published_at AT TIME ZONE 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+      ) AS published_at
     FROM updated
     UNION ALL
     SELECT
@@ -538,7 +618,7 @@ export async function publishOwnedMemberPageV2(
       END AS outcome,
       NULL::text AS slug,
       target.draft_rev,
-      NULL::timestamptz AS published_at
+      NULL::text AS published_at
     FROM target
     WHERE NOT EXISTS (SELECT 1 FROM updated)
     LIMIT 1;
@@ -551,11 +631,15 @@ export async function publishOwnedMemberPageV2(
   if (rows[0].outcome !== "success") return { status: "invalid" };
 
   const publishedDraftRev = parseRevision(rows[0].draft_rev);
-  const publishedAt = parseTimestamp(rows[0].published_at);
+  // Issued as SQL text above so the token carries the full stored precision;
+  // a JS Date here would truncate microseconds and break the guarded
+  // unpublish of this very generation.
+  const publishedAt = parsePublicationToken(rows[0].published_at);
   if (
     rows[0].slug !== authorization.slug ||
     publishedDraftRev === null ||
-    publishedAt === null
+    publishedAt === null ||
+    publishedAt === undefined
   ) {
     return { status: "invalid" };
   }
@@ -567,28 +651,71 @@ export async function publishOwnedMemberPageV2(
   };
 }
 
+/**
+ * Rejects unpublish intent that observed an older publication generation.
+ *
+ * The publication generation is the row's server-issued `published_at`
+ * instant, presented as the opaque publication token (the canonical UTC text
+ * form issued by this module, which preserves the stored microseconds); only
+ * an owner publish advances it. The editor presents the token it loaded (or
+ * null for a page never published), and a mismatch returns `conflict` without
+ * touching `is_published`, `draft_doc`, or `published_doc`. `draft_rev` is
+ * deliberately absent from the guard: a private draft autosave must never
+ * block an unpublish.
+ */
 export async function unpublishOwnedMemberPageV2(
   slugInput: unknown,
+  expectedPublishedAtInput: unknown,
 ): Promise<MemberPageV2UnpublishResult> {
   const authorization = await authorizeEditorRequest(slugInput);
   if (authorization.status !== "success") return authorization;
 
+  const expectedPublishedAt = parsePublicationToken(expectedPublishedAtInput);
+  if (expectedPublishedAt === undefined) return { status: "invalid" };
+
   const sql = getDbClient();
   const rows = (await sql`
-    UPDATE public.member_pages
-    SET
-      is_published = FALSE,
-      unpublished_at = CASE
-        WHEN is_published THEN NOW()
-        ELSE COALESCE(unpublished_at, NOW())
-      END,
-      updated_at = NOW()
-    WHERE slug = ${authorization.slug}
-      AND owner_account_id = ${authorization.accountId}
-    RETURNING slug, unpublished_at;
+    WITH target AS MATERIALIZED (
+      SELECT id
+      FROM public.member_pages
+      WHERE slug = ${authorization.slug}
+        AND owner_account_id = ${authorization.accountId}
+      FOR UPDATE
+    ),
+    updated AS (
+      UPDATE public.member_pages page
+      SET
+        is_published = FALSE,
+        unpublished_at = CASE
+          WHEN page.is_published THEN NOW()
+          ELSE COALESCE(page.unpublished_at, NOW())
+        END,
+        updated_at = NOW()
+      FROM target
+      WHERE page.id = target.id
+        AND page.slug = ${authorization.slug}
+        AND page.owner_account_id = ${authorization.accountId}
+        AND page.published_at IS NOT DISTINCT FROM ${expectedPublishedAt}::timestamptz
+      RETURNING page.slug, page.unpublished_at
+    )
+    SELECT
+      'success'::text AS outcome,
+      updated.slug,
+      updated.unpublished_at
+    FROM updated
+    UNION ALL
+    SELECT
+      'conflict'::text AS outcome,
+      NULL::text AS slug,
+      NULL::timestamptz AS unpublished_at
+    FROM target
+    WHERE NOT EXISTS (SELECT 1 FROM updated)
+    LIMIT 1;
   `) as OutcomeRow[];
   if (rows.length === 0) return { status: "not-found-or-forbidden" };
   if (rows.length !== 1) return { status: "invalid" };
+  if (rows[0].outcome === "conflict") return { status: "conflict" };
+  if (rows[0].outcome !== "success") return { status: "invalid" };
 
   const unpublishedAt = parseTimestamp(rows[0].unpublished_at);
   if (rows[0].slug !== authorization.slug || unpublishedAt === null) {

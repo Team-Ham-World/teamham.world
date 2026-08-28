@@ -99,8 +99,11 @@ describe("editor shell layout", () => {
     );
     expect(html).toContain('data-editor-unavailable="small-screen"');
     expect(html).toContain("Make room to edit.");
-    expect(html).toContain("at least 1280 pixels wide");
+    // The compact band edits from 1024px with sheets, so this is the real
+    // floor; the notice says so and does not promise phone support.
+    expect(html).toContain("at least 1024 pixels wide");
     expect(html).toContain("with a mouse or trackpad");
+    expect(html).toContain("Phones and tablets are not supported");
     expect(html).toContain('href="/m/hamfriend"');
     expect(html).not.toContain('data-editor-workspace="app-shell"');
     expect(html).not.toContain('data-editor-canvas="true"');

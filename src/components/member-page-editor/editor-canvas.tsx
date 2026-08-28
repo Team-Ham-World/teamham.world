@@ -3,7 +3,10 @@
 import type { ComponentType } from "react";
 
 import type { AssetMetadata } from "@/components/member-page-v2";
-import { getShowcaseProject, MemberPageV2Frame } from "@/components/member-page-v2";
+import {
+  composeMemberPageV2Layout,
+  MemberPageV2Frame,
+} from "@/components/member-page-v2";
 import themeStyles from "@/components/member-page-v2/MemberPageV2View.module.css";
 import { memberThemeStyle } from "@/components/member-page-v2/member-theme-presentation";
 import type {
@@ -85,7 +88,7 @@ export function EditorCanvas({
   BlockContainer = StaticCanvasBlockContainer,
 }: EditorCanvasProps) {
   const frameSelected = selection?.kind === "frame";
-  const showcaseProject = getShowcaseProject(document);
+  const { layout, showcaseProject } = composeMemberPageV2Layout(document);
 
   const profile = (
     <RegionWrapper
@@ -104,7 +107,7 @@ export function EditorCanvas({
       data-member-theme-surface="true"
       data-theme-id={theme.themeId}
       data-accent-id={theme.accentId}
-      data-member-layout={showcaseProject ? "showcase" : "blocks"}
+      data-member-layout={layout}
       className={`${themeStyles.themeSurface} min-w-0 max-w-full`}
       style={memberThemeStyle(theme)}
     >

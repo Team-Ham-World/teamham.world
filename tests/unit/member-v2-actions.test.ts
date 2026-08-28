@@ -11,7 +11,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("next/cache", () => ({ revalidatePath: mocks.revalidatePath }));
-vi.mock("@/lib/members/v2/dal", () => ({
+vi.mock("@/lib/members/v2/dal", async (importOriginal) => ({
+  // The publication-token validator is a pure function under test through
+  // the action boundary; only the store-facing DAL functions are mocked.
+  ...(await importOriginal<typeof import("@/lib/members/v2/dal")>()),
   autosaveOwnedMemberPageDraftV2: mocks.autosave,
   publishOwnedMemberPageV2: mocks.publish,
   unpublishOwnedMemberPageV2: mocks.unpublish,
@@ -218,6 +221,16 @@ describe("member V2 owner Server Actions", () => {
       revalidates: true,
     },
     {
+      dal: { status: "conflict" },
+      action: {
+        status: "conflict",
+        message:
+          "This page was published again in another editor. Reload the editor before unpublishing.",
+        fieldErrors: {},
+      },
+      revalidates: false,
+    },
+    {
       dal: { status: "invalid" },
       action: {
         status: "invalid",
@@ -242,10 +255,13 @@ describe("member V2 owner Server Actions", () => {
   }) => {
     mocks.unpublish.mockResolvedValueOnce(dal);
 
-    const result = await unpublishMemberPageV2Action({ slug: "hamfriend" });
+    const result = await unpublishMemberPageV2Action({
+      slug: "hamfriend",
+      expectedPublishedAt: NOW,
+    });
 
     expect(mocks.unpublish).toHaveBeenCalledOnce();
-    expect(mocks.unpublish).toHaveBeenCalledWith("hamfriend");
+    expect(mocks.unpublish).toHaveBeenCalledWith("hamfriend", NOW);
     expect(result).toEqual(action);
     expectSerializable(result);
     if (revalidates) expectPublicPaths();
@@ -341,7 +357,20 @@ describe("member V2 owner Server Actions", () => {
     ],
     [
       "unpublish slug",
-      () => unpublishMemberPageV2Action({ slug: "Not A Slug" }),
+      () =>
+        unpublishMemberPageV2Action({
+          slug: "Not A Slug",
+          expectedPublishedAt: null,
+        }),
+      "unpublish",
+    ],
+    [
+      "unpublish token",
+      () =>
+        unpublishMemberPageV2Action({
+          slug: "hamfriend",
+          expectedPublishedAt: "not-a-date",
+        }),
       "unpublish",
     ],
     [

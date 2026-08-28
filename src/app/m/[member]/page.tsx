@@ -79,6 +79,30 @@ async function failClosedPublishedV2(slug: string): Promise<never> {
   notFound();
 }
 
+/**
+ * Coarse slug-only signal that a published page rendered with one or more
+ * degraded assets. Follows the existing diagnostics: the public slug is the
+ * entire payload, a slug is logged once per process, and the log is capped at
+ * the first few distinct slugs so it can neither flood nor grow unbounded.
+ * No asset IDs, document content, theme values, or viewer state.
+ */
+const DEGRADED_RENDER_SLUG_LOG_LIMIT = 20;
+const degradedRenderSlugs = new Set<string>();
+
+function recordDegradedAssetRender(slug: string): void {
+  if (degradedRenderSlugs.has(slug)) return;
+  if (degradedRenderSlugs.size >= DEGRADED_RENDER_SLUG_LOG_LIMIT) return;
+  degradedRenderSlugs.add(slug);
+  try {
+    console.warn(
+      "[member-page] published V2 page rendered with degraded assets",
+      { slug },
+    );
+  } catch {
+    // A diagnostic is never worth failing a page render for.
+  }
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -428,7 +452,20 @@ export default async function MemberPage({
     if (assetMetadataResult.status === "invalid") {
       return failClosedPublishedV2(publishedV2.slug);
     }
-    if (assetMetadataResult.status === "unavailable") notFound();
+    if (assetMetadataResult.status === "unavailable") {
+      // A storage or database outage is a service failure, not content state.
+      // Report it as an error response instead of a branded 404 so operators
+      // can tell an incident apart from an unavailable medium (the degraded
+      // path below is only for content-level asset problems).
+      throw new Error("Member page asset metadata is temporarily unavailable.");
+    }
+    if (assetMetadataResult.degradedAssetIds.size > 0) {
+      // Content-level degradation: some referenced assets are missing,
+      // deletion-claimed, or stored with invalid metadata. The unaffected
+      // content stays at HTTP 200 and degraded media take the safe leaf
+      // fallbacks (omit image/portrait/gallery item, project artwork tile).
+      recordDegradedAssetRender(publishedV2.slug);
+    }
     return (
       <PageShell>
         <MemberPageV2View

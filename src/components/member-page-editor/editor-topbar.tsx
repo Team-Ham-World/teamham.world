@@ -20,6 +20,29 @@ export type EditorMode = "edit" | "preview";
 
 type Editor = ReturnType<typeof useMemberPageEditor>;
 
+/**
+ * Where the owner edits this page.
+ *
+ * The editor is the owner route with the edit flag set, so a fresh tab opened
+ * on this exact URL loads the stored draft — the recovery path for a tab that
+ * lost a revision race.
+ */
+export function memberPageEditorPath(slug: string): string {
+  return `${memberPath(slug)}?edit=1`;
+}
+
+/**
+ * The one destructive way out of a conflict.
+ *
+ * Reloading is what throws the unsaved local version away, so the control
+ * says so. Takes the location as an argument so the surrender is testable.
+ */
+export function discardLocalVersionAndReload(
+  target: { reload: () => void } = window.location,
+): void {
+  target.reload();
+}
+
 const MODE_CONTROL = `${EDITOR_QUIET_CONTROL} border-0 px-3 aria-pressed:bg-ink aria-pressed:text-paper aria-pressed:hover:bg-interactive-blue aria-pressed:hover:text-paper`;
 
 /** Rarely used next to Publish, so it gives up width first on small screens. */
@@ -147,9 +170,9 @@ export function EditorTopBar({
           <button
             type="button"
             className={SECONDARY_CONTROL}
-            onClick={() => window.location.reload()}
+            onClick={() => discardLocalVersionAndReload()}
           >
-            Reload editor
+            Discard this local version and reload
           </button>
         ) : null}
         {editor.hasPublishedSnapshot ? (
@@ -267,7 +290,7 @@ export function EditorNoticeStrip({
       ) : null}
 
       {editor.moderationHold ? (
-        <Notice tone="alert">
+        <Notice>
           An administrator placed this page on hold, so publishing is off for
           now. You can keep editing and you can still reset to your last live
           version.
@@ -275,15 +298,47 @@ export function EditorNoticeStrip({
       ) : null}
 
       {status.state === "conflict" ? (
-        <Notice tone="plain">
-          Your page changed somewhere else, so saving stopped to protect both
-          versions. Your text here is untouched. Reload the editor to pick up
-          the stored draft.
-        </Notice>
+        <section
+          aria-labelledby="conflict-recovery-heading"
+          className="border-2 border-ink bg-surface p-3"
+        >
+          <h3
+            id="conflict-recovery-heading"
+            className="flex items-center gap-2 text-sm font-bold"
+          >
+            <span aria-hidden="true">&#9888;</span> Saving stopped to protect
+            both versions
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-ink">
+            This page was saved from another tab, so this tab stopped saving.
+            Your local version is still on screen here, but it is not saved.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+            {/*
+              * The safe way first: a plain link (not a scripted open) with
+              * opener isolation, so the fresh editor can never reach back
+              * into this stranded tab. The current tab keeps the local
+              * version either way; nothing navigates on its own.
+              */}
+            <a
+              href={memberPageEditorPath(editor.slug)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={EDITOR_QUIET_CONTROL}
+            >
+              Open latest draft in a new tab
+            </a>
+            <p className="min-w-0 text-sm leading-relaxed text-muted">
+              Move anything you want to keep over there, then use
+              &ldquo;Discard this local version and reload&rdquo; above to pick
+              up the saved version here.
+            </p>
+          </div>
+        </section>
       ) : null}
 
       {status.state === "invalid" ? (
-        <Notice tone="alert">
+        <Notice>
           {status.invalidMessage ?? AUTOSAVE_INVALID_MESSAGE} Your work is still
           here and will save as soon as it is valid.
         </Notice>
@@ -302,21 +357,9 @@ export function EditorNoticeStrip({
   );
 }
 
-function Notice({
-  tone,
-  children,
-}: {
-  tone: "alert" | "plain";
-  children: React.ReactNode;
-}) {
+function Notice({ children }: { children: React.ReactNode }) {
   return (
-    <p
-      className={`flex items-start gap-2 border-2 bg-surface p-3 text-sm ${
-        tone === "alert"
-          ? "border-decorative-red font-bold text-ink"
-          : "border-ink text-ink"
-      }`}
-    >
+    <p className="flex items-start gap-2 border-2 border-decorative-red bg-surface p-3 text-sm font-bold text-ink">
       <span aria-hidden="true">&#9888;</span>
       <span>{children}</span>
     </p>

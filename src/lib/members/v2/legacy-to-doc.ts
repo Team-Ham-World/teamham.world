@@ -10,7 +10,20 @@ import { parseMemberPageDocumentV2 } from "@/lib/members/v2/validation";
 
 export interface LegacyToDocOptions {
   ids: () => string;
+  /**
+   * Import path: attach artwork to the external showcase by asset ID, with
+   * alt text regenerated from the project name.
+   */
   externalArtworkAssetId?: string;
+  /**
+   * Carry-forward path: keep a complete stored, non-decorative artwork
+   * reference — asset ID, existing alt text, and `decorative: false` —
+   * verbatim, so a legacy save never erases custom accessibility content.
+   * Callers must already have matched the external project identity; the
+   * bridge rejects decorative references because they are V2-only state the
+   * legacy model cannot represent.
+   */
+  externalArtwork?: MemberImageRef;
 }
 
 function requireOpaqueId(value: string, name: string): string {
@@ -23,8 +36,30 @@ function requireOpaqueId(value: string, name: string): string {
 
 function externalProjectArtwork(
   input: MemberContentInput,
+  carriedArtwork: MemberImageRef | undefined,
   assetId: string | undefined,
 ): MemberImageRef | undefined {
+  if (carriedArtwork !== undefined && assetId !== undefined) {
+    throw new TypeError(
+      "Supply externalArtwork or externalArtworkAssetId, never both.",
+    );
+  }
+  if (carriedArtwork !== undefined) {
+    if (input.showcase?.kind !== "external") {
+      throw new TypeError(
+        "externalArtwork may be supplied only for an external showcase.",
+      );
+    }
+    if (
+      carriedArtwork.decorative !== false ||
+      typeof carriedArtwork.alt !== "string"
+    ) {
+      throw new TypeError(
+        "externalArtwork must be a non-decorative reference with string alt text.",
+      );
+    }
+    return carriedArtwork;
+  }
   if (assetId === undefined) return undefined;
   if (input.showcase?.kind !== "external") {
     throw new TypeError(
@@ -42,7 +77,11 @@ export function legacyToDoc(
   input: MemberContentInput,
   opts: LegacyToDocOptions,
 ): MemberPageDocumentV2 {
-  const artwork = externalProjectArtwork(input, opts.externalArtworkAssetId);
+  const artwork = externalProjectArtwork(
+    input,
+    opts.externalArtwork,
+    opts.externalArtworkAssetId,
+  );
   let blocks: MemberBlock[] = [];
 
   if (input.showcase) {

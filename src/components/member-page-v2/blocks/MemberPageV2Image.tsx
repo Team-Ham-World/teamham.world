@@ -20,7 +20,10 @@ export function MemberPageV2Image({
 }: MemberPageV2ImageProps) {
   const metadata = assetMetadata.get(imageRef.assetId);
 
-  // Fail closed if metadata is absent
+  // Degraded asset (missing, claimed, or invalid metadata): omit this image
+  // and keep the rest of the page intact. The public metadata reader only
+  // returns entries it could resolve safely, so absence here means the safe
+  // fallback — never a broken <img>.
   if (!metadata) {
     return null;
   }

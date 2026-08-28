@@ -34,7 +34,15 @@ export async function DELETE(
     case "invalid":
       return privateJson({ error: "invalid_request" }, 400);
     case "referenced":
-      return privateJson({ error: "asset_referenced" }, 409);
+      // Owner-only detail: which stored document(s) still reference the asset.
+      // The deletion guard itself is unchanged.
+      return privateJson(
+        {
+          error: "asset_referenced",
+          referenceLocation: result.location,
+        },
+        409,
+      );
     case "conflict":
       return privateJson({ error: "asset_conflict" }, 409);
     case "not-found-or-forbidden":

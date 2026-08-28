@@ -18,7 +18,9 @@ import {
   type MemberFieldErrors,
 } from "@/lib/members/validation";
 import { isMemberPageV2Cohort } from "@/lib/members/v2/feature-flag";
+import type { MemberImageRef } from "@/lib/members/v2/document";
 import { legacyToDoc } from "@/lib/members/v2/legacy-to-doc";
+import { assessLegacyRepresentability } from "@/lib/members/v2/legacy-representability";
 import { parseMemberPageDocumentV2 } from "@/lib/members/v2/validation";
 
 interface MemberPageRow {
@@ -133,11 +135,11 @@ function parseNullableTimestamp(value: unknown): string | null {
 function legacyDocumentForPage(
   pageId: string,
   content: MemberContentInput,
-  externalArtworkAssetId?: string,
+  externalArtwork?: MemberImageRef,
 ) {
   return legacyToDoc(content, {
     ids: () => `legacy-featured-${pageId}`,
-    ...(externalArtworkAssetId ? { externalArtworkAssetId } : {}),
+    ...(externalArtwork ? { externalArtwork } : {}),
   });
 }
 
@@ -197,10 +199,10 @@ function hasSameExternalProjectIdentity(
   );
 }
 
-function preservedExternalArtworkAssetId(
+function preservedExternalArtwork(
   draftDocument: unknown,
   showcase: MemberContentInput["showcase"],
-): string | undefined {
+): MemberImageRef | undefined {
   if (showcase?.kind !== "external") return undefined;
 
   const parsedDraft = parseMemberPageDocumentV2(draftDocument);
@@ -211,11 +213,18 @@ function preservedExternalArtworkAssetId(
     if (
       block.project.kind !== "external" ||
       !block.project.artwork ||
+      block.project.artwork.decorative !== false ||
       !hasSameExternalProjectIdentity(block.project, showcase)
     ) {
       return undefined;
     }
-    return block.project.artwork.assetId;
+    // Carry the complete reference — asset ID, existing alt text, and the
+    // informative decorative flag — so a legacy save cannot erase custom
+    // accessibility content while the external project identity still
+    // matches. The non-decorative narrowing above keeps V2-only state from
+    // entering the legacy bridge even if this ever runs without the
+    // representability guard ahead of it.
+    return block.project.artwork;
   }
 
   return undefined;
@@ -237,6 +246,29 @@ function rejectV2CohortLegacyMutation(slug: string): void {
       "This page uses the new editor and cannot be changed through the legacy controls.",
     );
   }
+}
+
+// Owner-facing message for a stored document the legacy model cannot
+// represent. It must never quote or summarize the stored content.
+const LEGACY_UNREPRESENTABLE_OWNER_MESSAGE =
+  "This page has new-editor content that the legacy editor cannot save. " +
+  "An administrator must restore new-editor access before this page can change here.";
+
+// Short-term coexistence guard: before a legacy mutation overwrites
+// draft_doc or published_doc, reject when the stored document is a valid V2
+// document carrying content the legacy editor cannot rebuild (portrait,
+// non-paper theme, multiple blocks, non-featured block kinds, non-card
+// variants, or decorative project artwork). Values that do not parse as a
+// canonical V2 document keep the existing legacy fail-open behavior.
+function rejectLegacyOverwriteOfUnrepresentableDocument(
+  document: unknown,
+): void {
+  const assessment = assessLegacyRepresentability(document);
+  if (assessment.outcome !== "not-legacy-representable") return;
+  throw new MemberMutationError(
+    "invalid",
+    LEGACY_UNREPRESENTABLE_OWNER_MESSAGE,
+  );
 }
 
 function parsePublicPage(row: MemberPageRow): MemberPublicPage {
@@ -606,12 +638,18 @@ export async function updateOwnedMemberPage(
 
   const sql = getDbClient();
   const ownerRows = (await sql`
-    SELECT id, slug, draft_doc
+    SELECT id, slug, draft_doc, published_doc, is_published
     FROM public.member_pages
     WHERE slug = ${slug}
       AND owner_account_id = ${account.id}
     LIMIT 1;
-  `) as Array<{ id: unknown; slug: unknown; draft_doc: unknown }>;
+  `) as Array<{
+    id: unknown;
+    slug: unknown;
+    draft_doc: unknown;
+    published_doc: unknown;
+    is_published: unknown;
+  }>;
   if (ownerRows.length === 0) {
     throw new MemberAccessError("forbidden", "You cannot edit this member page.");
   }
@@ -624,8 +662,16 @@ export async function updateOwnedMemberPage(
     throw new Error("Malformed member-page ownership result");
   }
 
+  // The update below overwrites draft_doc, and published_doc too while the
+  // page is published. Reject first when either target document carries
+  // content the legacy model cannot represent.
+  rejectLegacyOverwriteOfUnrepresentableDocument(ownerRows[0].draft_doc);
+  if (ownerRows[0].is_published === true) {
+    rejectLegacyOverwriteOfUnrepresentableDocument(ownerRows[0].published_doc);
+  }
+
   const showcase = withoutRemoteShowcaseArtwork(content.data.showcase);
-  const externalArtworkAssetId = preservedExternalArtworkAssetId(
+  const externalArtwork = preservedExternalArtwork(
     ownerRows[0].draft_doc,
     showcase,
   );
@@ -636,7 +682,7 @@ export async function updateOwnedMemberPage(
       ...content.data,
       showcase,
     },
-    externalArtworkAssetId,
+    externalArtwork,
   );
 
   const rows = (await sql`
@@ -679,11 +725,16 @@ export async function setMemberPublication(
   }
   const sql = getDbClient();
   const pageRows = (await sql`
-    SELECT slug, moderation_hold
+    SELECT slug, moderation_hold, draft_doc, published_doc
     FROM public.member_pages
     WHERE id = ${pageId}
     LIMIT 1;
-  `) as Array<{ slug: unknown; moderation_hold: unknown }>;
+  `) as Array<{
+    slug: unknown;
+    moderation_hold: unknown;
+    draft_doc: unknown;
+    published_doc: unknown;
+  }>;
   if (pageRows.length === 0) {
     throw new MemberMutationError("not_found", "Member page not found.");
   }
@@ -701,6 +752,13 @@ export async function setMemberPublication(
       "invalid",
       "A page on moderation hold cannot be published.",
     );
+  }
+  // Publishing overwrites published_doc with draft_doc, so both stored
+  // documents must stay within the legacy model. Unpublish overwrites
+  // neither document and is never blocked by this guard.
+  if (isPublished) {
+    rejectLegacyOverwriteOfUnrepresentableDocument(pageRows[0].draft_doc);
+    rejectLegacyOverwriteOfUnrepresentableDocument(pageRows[0].published_doc);
   }
 
   const rows = (await sql`
