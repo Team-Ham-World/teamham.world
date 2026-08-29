@@ -10,8 +10,12 @@ import { MemberPageV2View } from "@/components/member-page-v2/MemberPageV2View";
 import { composeMemberPageV2Layout } from "@/components/member-page-v2/page-composition";
 import type {
   MemberBlock,
+  MemberBlockRow,
+  MemberBlockRowRatio,
   MemberPageDocumentV2,
+  MemberPageEntry,
 } from "@/lib/members/v2/document";
+import { rowEntryKey } from "@/lib/members/v2/member-page-entries";
 import {
   PAPER_DEFAULT_ACCENT_ID,
   resolveEnabledThemeAccent,
@@ -209,7 +213,9 @@ const LANDMARK_BY_BLOCK_ID = new Map(
   ORDERED_LANDMARKS.map((entry) => [entry.blockId, entry.landmark]),
 );
 
-function memberPageDocument(blocks: MemberBlock[]): MemberPageDocumentV2 {
+function memberPageDocument(
+  blocks: readonly MemberPageEntry[],
+): MemberPageDocumentV2 {
   return {
     schemaVersion: 2,
     frame: {
@@ -220,8 +226,12 @@ function memberPageDocument(blocks: MemberBlock[]): MemberPageDocumentV2 {
       portrait: null,
       theme: { id: "paper", accentId: PAPER_DEFAULT_ACCENT_ID },
     },
-    blocks,
+    blocks: [...blocks],
   };
+}
+
+function entryLeafId(entry: MemberPageEntry): string {
+  return entry.type === "row" ? entry.blocks[0].id : entry.id;
 }
 
 const PUBLIC_CONTEXT = {
@@ -245,6 +255,7 @@ const CANVAS_CALLBACKS = {
   onDuplicate: () => undefined,
   onDelete: () => undefined,
   onMove: () => undefined,
+  onTakeOutOfRow: () => undefined,
 };
 
 function renderEditor(document: MemberPageDocumentV2): string {
@@ -392,40 +403,67 @@ describe("showcase eligibility and body order", () => {
   );
   if (!note) throw new Error("fixture note missing");
 
-  it("gives an empty page the blocks layout and no showcase", () => {
+  it("gives an empty page the blocks layout and no header block", () => {
     const composition = composeMemberPageV2Layout(memberPageDocument([]));
     expect(composition).toEqual({
       layout: "blocks",
-      showcaseProject: null,
-      bodyBlocks: [],
+      headerSlotBlock: null,
+      bodyEntries: [],
     });
   });
 
-  it("makes a leading featured project the showcase and excludes it from the body", () => {
+  it("makes a leading featured project the header block and excludes it from the body", () => {
     const composition = composeMemberPageV2Layout(
       memberPageDocument([featured, note]),
     );
     expect(composition.layout).toBe("showcase");
-    expect(composition.showcaseProject?.id).toBe(featured.id);
-    expect(composition.bodyBlocks.map((block) => block.id)).toEqual([note.id]);
+    expect(composition.headerSlotBlock?.id).toBe(featured.id);
+    expect(composition.bodyEntries.map(entryLeafId)).toEqual([note.id]);
   });
 
-  it("keeps the blocks layout when no featured project is first", () => {
+  it("keeps the blocks layout when a row leads the page", () => {
     const composition = composeMemberPageV2Layout(
-      memberPageDocument([note, featured]),
+      memberPageDocument([
+        { type: "row", ratio: "1:1", blocks: [note, featured] },
+      ]),
     );
     expect(composition.layout).toBe("blocks");
-    expect(composition.showcaseProject).toBeNull();
-    expect(composition.bodyBlocks.map((block) => block.id)).toEqual([
-      note.id,
-      featured.id,
-    ]);
+    expect(composition.headerSlotBlock).toBeNull();
+    expect(composition.bodyEntries).toHaveLength(1);
   });
 
-  it("renders the same showcase eligibility in both trees", () => {
-    const showcaseDocument = memberPageDocument([featured, note]);
-    const publicHtml = renderPublic(showcaseDocument);
-    const editorHtml = renderEditor(showcaseDocument);
+  it("eligible for the header slot: every standalone block variant", () => {
+    // The fixture registry fails to compile until it covers every
+    // `MemberBlock` type (guarded in the parity suite above), so iterating it
+    // walks every variant without hand-copying type lists.
+    for (const block of ALL_BLOCKS) {
+      const composition = composeMemberPageV2Layout(
+        memberPageDocument([block, note]),
+      );
+      expect(composition.layout, block.id).toBe("showcase");
+      expect(composition.headerSlotBlock, block.id).toBe(block);
+      expect(
+        composition.bodyEntries.map(entryLeafId),
+        block.id,
+      ).toEqual([note.id]);
+    }
+  });
+
+  it("never gives a leading row the header slot", () => {
+    const composition = composeMemberPageV2Layout(
+      memberPageDocument([
+        { type: "row", ratio: "1:1", blocks: [featured, note] },
+      ]),
+    );
+    expect(composition.layout).toBe("blocks");
+    expect(composition.headerSlotBlock).toBeNull();
+    expect(composition.bodyEntries).toHaveLength(1);
+  });
+
+  it("renders the same header eligibility in both trees", () => {
+    const headerDocument = memberPageDocument([featured, note]);
+    const publicHtml = renderPublic(headerDocument);
+    const editorHtml = renderEditor(headerDocument);
 
     for (const [label, html] of [
       ["public", publicHtml],
@@ -445,8 +483,49 @@ describe("showcase eligibility and body order", () => {
     }
   });
 
+  it("renders stored alignment identically in both trees", () => {
+    const alignedRichText: MemberBlock = {
+      id: "b-align",
+      type: "richText",
+      content: {
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            attrs: { textAlign: "center" },
+            content: [{ type: "text", text: "Centered for parity." }],
+          },
+          {
+            type: "heading",
+            attrs: { level: 2, textAlign: "right" },
+            content: [{ type: "text", text: "Right heading parity." }],
+          },
+        ],
+      },
+    };
+    const alignedDocument = memberPageDocument([alignedRichText, note]);
+    const publicHtml = renderPublic(alignedDocument);
+    const editorHtml = renderEditor(alignedDocument);
+
+    for (const [label, html] of [
+      ["public", publicHtml],
+      ["editor", editorHtml],
+    ] as const) {
+      // Class-to-element composition is proven exactly in the focused
+      // renderer test; here both trees only need the alignment class and
+      // the landmark text, with no inline-style fallback.
+      expect(html, label).toContain("text-center");
+      expect(html, label).toContain("Centered for parity.");
+      expect(html, label).toContain("text-right");
+      expect(html, label).toContain("Right heading parity.");
+      expect(html, label).not.toContain("text-align:");
+    }
+  });
+
   it("renders the same plain-body eligibility in both trees", () => {
-    const blocksDocument = memberPageDocument([note, featured]);
+    const blocksDocument = memberPageDocument([
+      { type: "row", ratio: "1:1", blocks: [note, featured] },
+    ]);
     const publicHtml = renderPublic(blocksDocument);
     const editorHtml = renderEditor(blocksDocument);
 
@@ -464,5 +543,197 @@ describe("showcase eligibility and body order", () => {
         firstIndexOf(html, "Lantern row"),
       );
     }
+  });
+
+  it("renders a non-project header block once, in the header and not the body", () => {
+    const noteDocument = memberPageDocument([note, featured]);
+    const publicHtml = renderPublic(noteDocument);
+    const editorHtml = renderEditor(noteDocument);
+
+    for (const [label, html] of [
+      ["public", publicHtml],
+      ["editor", editorHtml],
+    ] as const) {
+      expect(html, label).toContain('data-member-layout="showcase"');
+      expect(html, label).toContain('data-profile-showcase="true"');
+      expect(html, label).not.toContain(
+        'data-featured-project-layout="showcase"',
+      );
+      expect(html, label).toContain('data-featured-project-layout="standard"');
+      expect(html.match(/Currently experimenting/gu), label).toHaveLength(1);
+      const noteIndex = firstIndexOf(
+        html,
+        "Currently experimenting with tiny multiplayer games.",
+      );
+      expect(noteIndex).toBeLessThan(firstIndexOf(html, "Featured project"));
+      expect(noteIndex).toBeLessThan(firstIndexOf(html, "Lantern row"));
+    }
+  });
+});
+
+describe("row parity", () => {
+  function parityRow(
+    left: MemberBlock,
+    right: MemberBlock,
+    ratio: MemberBlockRowRatio = "1:1",
+  ): MemberBlockRow {
+    return { type: "row", ratio, blocks: [left, right] };
+  }
+
+  function parityNote(id: string, text: string): MemberBlock {
+    return { id, type: "calloutQuote", variant: "note", text, attribution: null };
+  }
+
+  it("renders one shared row geometry in both trees for every ratio", () => {
+    for (const ratio of ["1:1", "1:2", "2:1"] as const) {
+      const rowDocument = memberPageDocument([
+        parityRow(
+          ALL_BLOCKS[0],
+          parityNote("parity-note", "Right-hand side."),
+          ratio,
+        ),
+      ]);
+      const publicHtml = renderPublic(rowDocument);
+      const editorHtml = renderEditor(rowDocument);
+
+      const gridClass = {
+        "1:1": "lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]",
+        "1:2": "lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]",
+        "2:1": "lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]",
+      }[ratio];
+
+      for (const [label, html] of [
+        ["public", publicHtml],
+        ["editor", editorHtml],
+      ] as const) {
+        expect(html, `${label} ${ratio}`).toContain(
+          `data-member-row-ratio="${ratio}"`,
+        );
+        expect(html, `${label} ${ratio}`).toContain(gridClass);
+        expect(html, `${label} ${ratio}`).toContain("grid grid-cols-1 gap-14");
+        expect(firstIndexOf(html, "Origin story")).toBeLessThan(
+          firstIndexOf(html, "Right-hand side."),
+        );
+      }
+    }
+  });
+
+  it("applies the same survivor plan in both trees", () => {
+    const brokenWide = ALL_BLOCKS.find(
+      (candidate): candidate is Extract<MemberBlock, { type: "image" }> =>
+        candidate.id === "b-image-wide",
+    );
+    if (!brokenWide) throw new Error("fixture wide image missing");
+    const degradedRow = memberPageDocument([
+      parityRow(ALL_BLOCKS[0], {
+        ...brokenWide,
+        image: { assetId: "missing-parity-asset", alt: null, decorative: true },
+      }),
+      parityNote("after-row", "After the row."),
+    ]);
+    const publicHtml = renderPublic(degradedRow);
+    const editorHtml = renderEditor(degradedRow);
+
+    for (const [label, html] of [
+      ["public", publicHtml],
+      ["editor", editorHtml],
+    ] as const) {
+      expect(html, label).not.toContain("data-member-row-ratio");
+      expect(html, label).not.toContain("/member-assets/missing-parity-asset");
+      expect(html, label).toContain("Origin story");
+      expect(firstIndexOf(html, "Origin story"), label).toBeLessThan(
+        firstIndexOf(html, "After the row."),
+      );
+    }
+  });
+
+  it("applies the same omitted plan in both trees", () => {
+    const deadImage = (id: string, assetId: string): MemberBlock => ({
+      id,
+      type: "image",
+      variant: "framed",
+      image: { assetId, alt: `Dead ${id}`, decorative: false },
+      caption: null,
+    });
+    const omittedRow = memberPageDocument([
+      parityRow(deadImage("dead-a", "missing-a"), deadImage("dead-b", "missing-b")),
+      parityNote("after-row", "After the row."),
+    ]);
+    const publicHtml = renderPublic(omittedRow);
+    const editorHtml = renderEditor(omittedRow);
+
+    for (const [label, html] of [
+      ["public", publicHtml],
+      ["editor", editorHtml],
+    ] as const) {
+      expect(html, label).not.toContain("data-member-row-ratio");
+      expect(html, label).not.toContain("/member-assets/missing-a");
+      expect(html, label).not.toContain("/member-assets/missing-b");
+      expect(html, label).toContain("After the row.");
+    }
+  });
+
+  it("gives row-placed images each tree's own column hints for the same shares", () => {
+    const imageLeft: MemberBlock = {
+      id: "parity-image",
+      type: "image",
+      variant: "framed",
+      image: { assetId: "asset-a", alt: "Parity image", decorative: false },
+      caption: null,
+    };
+    const rowDocument = memberPageDocument([
+      parityRow(imageLeft, parityNote("parity-note", "Text column.")),
+    ]);
+    const publicHtml = renderPublic(rowDocument);
+    const editorHtml = renderEditor(rowDocument);
+
+    expect(publicHtml).toContain(
+      'sizes="(min-width: 1024px) 452px, calc(100vw - 2.5rem)"',
+    );
+    expect(editorHtml).toContain(
+      'sizes="(min-width: 1024px) 426px, calc(100vw - 2.5rem)"',
+    );
+    expect(editorHtml).not.toContain('sizes="(min-width: 1024px) 452px');
+  });
+
+  it("keeps the row out of the showcase slot in both trees", () => {
+    const featuredInRow: MemberBlock = {
+      id: "parity-row-featured",
+      type: "featuredProject",
+      variant: "card",
+      project: externalProject("Row showcase", "row-showcase"),
+    };
+    const rowDocument = memberPageDocument([
+      parityRow(featuredInRow, parityNote("parity-note", "Beside the project.")),
+    ]);
+    const publicHtml = renderPublic(rowDocument);
+    const editorHtml = renderEditor(rowDocument);
+
+    for (const [label, html] of [
+      ["public", publicHtml],
+      ["editor", editorHtml],
+    ] as const) {
+      expect(html, label).toContain('data-member-layout="blocks"');
+      expect(html, label).not.toContain("data-profile-showcase");
+      expect(html, label).toContain('data-featured-project-layout="standard"');
+      expect(html, label).not.toContain(">Showcase<");
+    }
+  });
+
+  it("keys row entries by their analysis descriptor, not a per-path scheme", () => {
+    const entries: MemberPageEntry[] = [
+      parityRow(
+        ALL_BLOCKS[0],
+        parityNote("parity-note", "Right-hand side."),
+        "2:1",
+      ),
+    ];
+    const rowEntry = entries[0];
+    if (rowEntry.type !== "row") throw new Error("expected a row");
+    const editorHtml = renderEditor(memberPageDocument(entries));
+    expect(editorHtml).toContain(
+      `data-sortable-block-id="${rowEntryKey(rowEntry).replace(/"/g, "&quot;")}"`,
+    );
+    expect(editorHtml).toContain("data-sortable-block-id=");
   });
 });

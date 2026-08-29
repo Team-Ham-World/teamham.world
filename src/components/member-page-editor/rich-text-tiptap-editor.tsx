@@ -3,10 +3,15 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { Editor, JSONContent } from "@tiptap/core";
 import Link from "@tiptap/extension-link";
+import TextAlign from "@tiptap/extension-text-align";
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 
-import type { RichTextDoc } from "@/lib/members/v2/document";
+import {
+  RICH_TEXT_ALIGNMENTS,
+  type RichTextAlignment,
+  type RichTextDoc,
+} from "@/lib/members/v2/document";
 
 import type { RichTextEditorProps } from "./rich-text-editor-lazy";
 import {
@@ -16,6 +21,9 @@ import {
   richTextDocsEqual,
 } from "./rich-text-adapter";
 import styles from "./rich-text-tiptap-editor.module.css";
+
+type ProseMirrorState = Editor["state"];
+type ProseMirrorNode = Editor["state"]["doc"];
 
 const EMPTY_EDITOR_DOC: JSONContent = {
   type: "doc",
@@ -49,6 +57,7 @@ interface ToolbarState {
   link: boolean;
   linkHref: string;
   selectionEmpty: boolean;
+  align: RichTextAlignment | "mixed";
 }
 
 const EMPTY_TOOLBAR_STATE: ToolbarState = {
@@ -63,7 +72,49 @@ const EMPTY_TOOLBAR_STATE: ToolbarState = {
   link: false,
   linkHref: "",
   selectionEmpty: true,
+  align: "left",
 };
+
+/**
+ * The alignment a selection would edit: the shared value for a caret or a
+ * uniform selection, "mixed" when the covered paragraph/heading blocks
+ * disagree. Non-alignable textblocks never occur in this schema, but a
+ * selection that covers none of them still reads as mixed rather than left.
+ */
+function selectionTextAlign(
+  state: ProseMirrorState,
+): ToolbarState["align"] {
+  const normalize = (value: unknown): RichTextAlignment =>
+    value === "center" || value === "right" ? value : "left";
+
+  const { from, to, empty } = state.selection;
+  let found: RichTextAlignment | null = null;
+  let mixed = false;
+
+  const read = (node: ProseMirrorNode): boolean => {
+    if (
+      !node.isTextblock ||
+      (node.type.name !== "paragraph" && node.type.name !== "heading")
+    ) {
+      return true;
+    }
+    const aligned = normalize(node.attrs.textAlign);
+    if (found !== null && found !== aligned) {
+      mixed = true;
+      return false;
+    }
+    found ??= aligned;
+    return true;
+  };
+
+  if (empty) {
+    found = normalize(state.selection.$from.parent.attrs.textAlign);
+  } else {
+    state.doc.nodesBetween(from, to, read);
+  }
+
+  return mixed || found === null ? "mixed" : found;
+}
 
 /** The only module that imports TipTap. It is reached through next/dynamic. */
 export function RichTextTipTapEditor({
@@ -122,12 +173,24 @@ export function RichTextTipTapEditor({
           rel: "noopener noreferrer",
         },
       }),
+      TextAlign.configure({
+        types: ["paragraph", "heading"],
+        alignments: [...RICH_TEXT_ALIGNMENTS],
+        defaultAlignment: null,
+      }),
     ],
     content: transientDraft
       ? (transientDraft.editorJson as JSONContent)
       : content
         ? canonicalRichTextToTipTapJson(content)
         : EMPTY_EDITOR_DOC,
+    onCreate: ({ editor: createdEditor }) => {
+      // The toolbar state store only re-reads the editor on a transaction, so
+      // a mounted-but-unfocused editor would otherwise leave every button on
+      // its null-editor fallback until the first keystroke. One no-op
+      // transaction wakes it without touching the document or taking focus.
+      createdEditor.view.dispatch(createdEditor.state.tr);
+    },
     editorProps: {
       attributes: {
         ...(controlId ? { id: controlId } : {}),
@@ -202,6 +265,7 @@ export function RichTextTipTapEditor({
         link: currentEditor.isActive("link"),
         linkHref: typeof href === "string" ? href : "",
         selectionEmpty: currentEditor.state.selection.empty,
+        align: selectionTextAlign(currentEditor.state),
       } satisfies ToolbarState;
     },
   }) ?? EMPTY_TOOLBAR_STATE;
@@ -227,7 +291,8 @@ export function RichTextTipTapEditor({
       </div>
 
       <p id={hintId} className="mt-3 text-sm leading-relaxed text-muted">
-        Use paragraphs, H2 or H3 headings, bold, italic, links, lists, and quotes.
+        Use paragraphs, H2 or H3 headings, bold, italic, links, lists, quotes,
+        and left, center, or right text alignment.
         Empty text stays here until it is ready and does not autosave.
       </p>
       <p
@@ -305,6 +370,24 @@ function RichTextToolbar({
           label="H3"
           active={state.heading3}
           onPress={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+        />
+        <ToolbarButton
+          label="Left"
+          ariaLabel="Align left"
+          active={state.align === "left"}
+          onPress={() => editor.chain().focus().unsetTextAlign().run()}
+        />
+        <ToolbarButton
+          label="Center"
+          ariaLabel="Align center"
+          active={state.align === "center"}
+          onPress={() => editor.chain().focus().setTextAlign("center").run()}
+        />
+        <ToolbarButton
+          label="Right"
+          ariaLabel="Align right"
+          active={state.align === "right"}
+          onPress={() => editor.chain().focus().setTextAlign("right").run()}
         />
         <ToolbarButton
           label="Bold"
@@ -418,11 +501,13 @@ function RichTextToolbar({
 
 function ToolbarButton({
   label,
+  ariaLabel,
   active,
   disabled = false,
   onPress,
 }: {
   label: string;
+  ariaLabel?: string;
   active: boolean;
   disabled?: boolean;
   onPress: () => void;
@@ -430,7 +515,7 @@ function ToolbarButton({
   return (
     <button
       type="button"
-      aria-label={label}
+      aria-label={ariaLabel ?? label}
       aria-pressed={active}
       disabled={disabled}
       className={`${TOOLBAR_CONTROL} ${ACTIVE_TOOLBAR_STATE}`}

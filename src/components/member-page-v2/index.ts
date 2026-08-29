@@ -1,9 +1,14 @@
 export { MemberPageV2View } from "./MemberPageV2View";
 export {
   composeMemberPageV2Layout,
-  getShowcaseProject,
+  getHeaderSlotBlock,
+  memberPageV2RowPlacement,
+  planMemberPageV2Entry,
 } from "./page-composition";
-export type { MemberPageV2Layout } from "./page-composition";
+export type {
+  MemberPageV2Layout,
+  MemberPageV2Placement,
+} from "./page-composition";
 export { MemberPageThemeStyle } from "./MemberPageThemeStyle";
 export type {
   MemberPageV2ViewProps,
@@ -23,13 +28,17 @@ export type {
  */
 export { MemberPageV2Frame } from "./frame/MemberPageV2Frame";
 export { MemberPageV2Body } from "./blocks/MemberPageV2Body";
+export { MemberPageV2EntryFrame } from "./blocks/MemberPageV2EntryFrame";
 export {
   MEMBER_PAGE_PUBLIC_IMAGE_SIZES,
+  MEMBER_PAGE_PUBLIC_ROW_COLUMN_PX,
+  memberPageV2ImageSizesForPlacement,
   renderMemberPageV2LeafBlock,
 } from "./blocks/MemberPageV2LeafBlock";
 export type {
   MemberPageV2ImageSizes,
   MemberPageV2LeafContext,
+  MemberPageV2RowColumnPx,
 } from "./blocks/MemberPageV2LeafBlock";
 export { MemberPageV2RichText } from "./blocks/MemberPageV2RichText";
 export { MemberPageV2FeaturedProject } from "./blocks/MemberPageV2FeaturedProject";

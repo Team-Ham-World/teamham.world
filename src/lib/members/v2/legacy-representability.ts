@@ -1,4 +1,4 @@
-import type { MemberBlock } from "@/lib/members/v2/document";
+import type { MemberPageEntry } from "@/lib/members/v2/document";
 import { PAPER_DEFAULT_ACCENT_ID } from "@/lib/members/v2/themes";
 import { parseMemberPageDocumentV2 } from "@/lib/members/v2/validation";
 
@@ -60,8 +60,11 @@ function unrepresentable(
  * bridge verbatim when the external project identity still matches.
  */
 function assessBlock(
-  block: MemberBlock,
+  block: MemberPageEntry,
 ): LegacyRepresentabilityAssessment {
+  // Rows are V2-only layout the legacy editor cannot rebuild; the type check
+  // below rejects them with the same stable machine reason as other
+  // non-featured entries.
   if (block.type !== "featuredProject") {
     return unrepresentable("block-kind", ["blocks", 0, "type"]);
   }

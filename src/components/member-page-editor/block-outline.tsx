@@ -1,25 +1,18 @@
 "use client";
 
 import type { MemberBlock, MemberPageDocumentV2 } from "@/lib/members/v2/document";
+import { analyzeMemberPageEntries } from "@/lib/members/v2/member-page-entries";
 import { MAX_BLOCKS } from "@/lib/members/v2/limits";
 
 import { blockTypeLabel } from "./document-ops";
 import { EDITOR_PRIMARY_CONTROL } from "./editor-controls";
-import { BlockTypeIcon, PersonIcon, PlusIcon } from "./editor-icons";
-
-/**
- * Navigator for the page's own structure.
- *
- * A long page is dozens of screens tall in the canvas, so the rail carries the
- * whole document as a short list: what each block is, in what order, and which
- * one is being edited. Choosing a row selects that block and brings it into
- * view. Reordering and deletion deliberately stay on the block itself in the
- * canvas, so there is exactly one place to manipulate a block and no chance of
- * two lists disagreeing about what is where.
- */
+import { BlockTypeIcon, GripIcon, PersonIcon, PlusIcon } from "./editor-icons";
+import { MEMBER_ROW_ENTRY_LABEL } from "./editor-canvas";
 
 const ROW =
   "flex w-full min-h-11 min-w-0 items-center gap-3 border-l-4 py-2 pr-3 pl-3 text-left transition-[background-color,border-color] focus-visible:outline-3 focus-visible:-outline-offset-2 focus-visible:outline-interactive-blue hover:bg-paper motion-reduce:transition-none";
+
+const ROW_CHILD = `${ROW} pl-10`;
 
 function selectedRow(selected: boolean, invalid: boolean): string {
   if (selected) return "border-l-interactive-blue bg-paper";
@@ -63,6 +56,49 @@ function firstText(node: unknown): string | null {
   return null;
 }
 
+function BlockOutlineButton({
+  block,
+  position,
+  selected,
+  invalid,
+  className,
+  onSelectBlock,
+}: {
+  block: MemberBlock;
+  position: number;
+  selected: boolean;
+  invalid: boolean;
+  className?: string;
+  onSelectBlock: (blockId: string, invoker: HTMLButtonElement) => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      aria-current={selected ? "true" : undefined}
+      className={`${className ?? ROW} ${selectedRow(selected, invalid)}`}
+      onClick={(event) => onSelectBlock(block.id, event.currentTarget)}
+    >
+      <span
+        aria-hidden="true"
+        className="w-4 shrink-0 text-right text-xs font-bold text-muted tabular-nums"
+      >
+        {position}
+      </span>
+      <BlockTypeIcon type={block.type} className="size-4 shrink-0 text-muted" />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-bold">
+          {blockTypeLabel(block.type)}
+        </span>
+        <span className="block truncate text-xs text-muted">
+          {blockOutlineSummary(block)}
+        </span>
+      </span>
+      {invalid ? <RowFlag /> : null}
+    </button>
+  );
+}
+
 export function BlockOutline({
   document,
   selection,
@@ -83,6 +119,9 @@ export function BlockOutline({
   onAddBlock: (invoker: HTMLButtonElement) => void;
 }) {
   const frameSelected = selection?.kind === "frame";
+  const analysis = analyzeMemberPageEntries(document.blocks);
+  const selectedBlockId =
+    selection?.kind === "block" ? selection.blockId : null;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-col" data-editor-outline="true">
@@ -109,39 +148,51 @@ export function BlockOutline({
             </button>
           </li>
 
-          {document.blocks.map((block, index) => {
-            const selected =
-              selection?.kind === "block" && selection.blockId === block.id;
-            const invalid = invalidBlockIds.has(block.id);
-            return (
-              <li key={block.id}>
-                <button
-                  type="button"
-                  aria-pressed={selected}
-                  aria-current={selected ? "true" : undefined}
-                  className={`${ROW} ${selectedRow(selected, invalid)}`}
-                  onClick={(event) => onSelectBlock(block.id, event.currentTarget)}
-                >
-                  <span
-                    aria-hidden="true"
-                    className="w-4 shrink-0 text-right text-xs font-bold text-muted tabular-nums"
-                  >
-                    {index + 1}
-                  </span>
-                  <BlockTypeIcon
-                    type={block.type}
-                    className="size-4 shrink-0 text-muted"
+          {analysis.entries.map((descriptor) => {
+            const position = descriptor.index + 1;
+            const entry = descriptor.entry;
+            if (entry.type !== "row") {
+              return (
+                <li key={descriptor.key}>
+                  <BlockOutlineButton
+                    block={entry}
+                    position={position}
+                    selected={selectedBlockId === entry.id}
+                    invalid={invalidBlockIds.has(entry.id)}
+                    onSelectBlock={onSelectBlock}
                   />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-bold">
-                      {blockTypeLabel(block.type)}
-                    </span>
-                    <span className="block truncate text-xs text-muted">
-                      {blockOutlineSummary(block)}
-                    </span>
+                </li>
+              );
+            }
+
+            return (
+              <li key={descriptor.key}>
+                <div
+                  className="flex min-h-11 min-w-0 items-center gap-3 py-2 pr-3 pl-3"
+                  aria-hidden="true"
+                >
+                  <span className="w-4 shrink-0 text-right text-xs font-bold text-muted tabular-nums">
+                    {position}
                   </span>
-                  {invalid ? <RowFlag /> : null}
-                </button>
+                  <GripIcon className="size-4 shrink-0 text-muted" />
+                  <span className="min-w-0 flex-1 truncate text-sm font-bold">
+                    {MEMBER_ROW_ENTRY_LABEL}
+                  </span>
+                </div>
+                <ul>
+                  {entry.blocks.map((child) => (
+                    <li key={child.id}>
+                      <BlockOutlineButton
+                        block={child}
+                        position={position}
+                        selected={selectedBlockId === child.id}
+                        invalid={invalidBlockIds.has(child.id)}
+                        className={ROW_CHILD}
+                        onSelectBlock={onSelectBlock}
+                      />
+                    </li>
+                  ))}
+                </ul>
               </li>
             );
           })}
@@ -165,7 +216,7 @@ export function BlockOutline({
           Add a block
         </button>
         <p className="mt-2 text-xs text-muted">
-          {document.blocks.length} of {MAX_BLOCKS} blocks used
+          {analysis.leafCount} of {MAX_BLOCKS} blocks used
         </p>
       </div>
     </div>

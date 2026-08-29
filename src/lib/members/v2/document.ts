@@ -71,16 +71,22 @@ export interface RichTextText {
   marks?: RichTextMark[];
 }
 
+export const RICH_TEXT_ALIGNMENTS = ["left", "center", "right"] as const;
+
+export type RichTextAlignment = (typeof RICH_TEXT_ALIGNMENTS)[number];
+
+/** The alignments stored on a node: left is the default and is never stored. */
+export type RichTextStoredAlignment = Exclude<RichTextAlignment, "left">;
+
 export interface RichTextParagraph {
   type: "paragraph";
+  attrs?: { textAlign: RichTextStoredAlignment };
   content: RichTextText[];
 }
 
 export interface RichTextHeading {
   type: "heading";
-  attrs: {
-    level: 2 | 3;
-  };
+  attrs: { level: 2 | 3; textAlign?: RichTextStoredAlignment };
   content: RichTextText[];
 }
 
@@ -187,6 +193,18 @@ export type MemberBlock =
   | GalleryBlock
   | CalloutQuoteBlock;
 
+export const MEMBER_BLOCK_ROW_RATIOS = ["1:1", "1:2", "2:1"] as const;
+
+export type MemberBlockRowRatio = (typeof MEMBER_BLOCK_ROW_RATIOS)[number];
+
+export interface MemberBlockRow {
+  type: "row";
+  ratio: MemberBlockRowRatio;
+  blocks: [left: MemberBlock, right: MemberBlock];
+}
+
+export type MemberPageEntry = MemberBlock | MemberBlockRow;
+
 export interface MemberPageFrameV2 {
   displayName: string;
   summary: string | null;
@@ -202,5 +220,5 @@ export interface MemberPageFrameV2 {
 export interface MemberPageDocumentV2 {
   schemaVersion: typeof MEMBER_PAGE_DOCUMENT_SCHEMA_VERSION;
   frame: MemberPageFrameV2;
-  blocks: MemberBlock[];
+  blocks: MemberPageEntry[];
 }

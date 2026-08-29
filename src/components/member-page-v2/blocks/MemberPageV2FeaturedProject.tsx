@@ -25,7 +25,6 @@ export function MemberPageV2FeaturedProject({
   return (
     <section
       aria-labelledby={`featured-${block.id}`}
-      className={showcaseLayout ? "mt-16 lg:mt-0" : undefined}
       data-featured-project-layout={layout}
     >
       <h2

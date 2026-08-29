@@ -8,6 +8,7 @@ import themeStyles from "@/components/member-page-v2/MemberPageV2View.module.css
 import { memberThemeStyle } from "@/components/member-page-v2/member-theme-presentation";
 import type { MemberPageDocumentV2 } from "@/lib/members/v2/document";
 import { extractMemberPageAssetIds } from "@/lib/members/v2/asset-references";
+import { analyzeMemberPageEntries } from "@/lib/members/v2/member-page-entries";
 import { MAX_BLOCKS } from "@/lib/members/v2/limits";
 import { memberPath } from "@/lib/site";
 import {
@@ -239,11 +240,31 @@ export function DesktopMemberPageEditor(props: MemberPageEditorProps) {
     props.theme,
   ]);
 
+  const entryAnalysis = useMemo(
+    () => analyzeMemberPageEntries(editor.document.blocks),
+    [editor.document.blocks],
+  );
   const selectedBlock =
     editor.selectedBlockId === null
       ? null
-      : editor.document.blocks.find((block) => block.id === editor.selectedBlockId) ??
-        null;
+      : entryAnalysis.leafDescriptorFor(editor.selectedBlockId)?.block ?? null;
+  const selectedRowPlacement = selectedBlock
+    ? entryAnalysis.rowPlacementFor(selectedBlock.id)
+    : null;
+  const selectedEntryIndex = selectedBlock
+    ? entryAnalysis.leafDescriptorFor(selectedBlock.id)?.entryIndex ?? null
+    : null;
+  const pairingAvailability =
+    selectedBlock && !selectedRowPlacement && selectedEntryIndex !== null
+      ? {
+          previous:
+            selectedEntryIndex > 0 &&
+            editor.document.blocks[selectedEntryIndex - 1].type !== "row",
+          next:
+            selectedEntryIndex < editor.document.blocks.length - 1 &&
+            editor.document.blocks[selectedEntryIndex + 1].type !== "row",
+        }
+      : null;
   const selection = useMemo(
     () =>
       selectedBlock
@@ -463,7 +484,7 @@ export function DesktopMemberPageEditor(props: MemberPageEditorProps) {
       presentation="inspector"
       canAddBlock={canAddBlock(editor.document)}
       canAddFeaturedProject={canAddFeaturedProject(editor.document)}
-      blockCount={editor.document.blocks.length}
+      blockCount={entryAnalysis.leafCount}
       maxBlocks={MAX_BLOCKS}
       nextId={idGenerator}
       assets={assets}
@@ -506,6 +527,14 @@ export function DesktopMemberPageEditor(props: MemberPageEditorProps) {
         });
       }}
       onChange={(block) => editor.updateBlock(block)}
+      rowRatio={selectedRowPlacement?.ratio ?? null}
+      pairingAvailability={pairingAvailability}
+      onPair={(side) => {
+        editor.pairBlocks(selectedBlock.id, side);
+      }}
+      onSetRatio={(ratio) => editor.setRowRatio(selectedBlock.id, ratio)}
+      onSwapSides={() => editor.swapRowSides(selectedBlock.id)}
+      onSplitRow={() => editor.splitRow(selectedBlock.id)}
     />
   ) : frameSelected ? (
     <FrameInspector
@@ -650,7 +679,13 @@ export function DesktopMemberPageEditor(props: MemberPageEditorProps) {
                 const result = editor.reorderBlock(blockId, targetIndex);
                 if (result.status === "ok") {
                   setFrameSelected(false);
-                  scheduleFocusById(blockDragHandleId(blockId));
+                  // A row drag reports the row's representative child; focus
+                  // lands on the handle the row actually owns.
+                  const descriptor =
+                    entryAnalysis.entryDescriptorFor(blockId);
+                  scheduleFocusById(
+                    blockDragHandleId(descriptor?.key ?? blockId),
+                  );
                 }
               }}
               onAnnounce={editor.announce}
@@ -665,20 +700,23 @@ export function DesktopMemberPageEditor(props: MemberPageEditorProps) {
                   }
                 },
                 onDelete: (blockId) => {
-                  const index = editor.document.blocks.findIndex(
-                    (block) => block.id === blockId,
-                  );
                   const result = editor.deleteBlock(blockId);
-                  if (result.status !== "ok") return;
+                  if (result.status !== "ok" || !result.removed) return;
                   setInspectorOpen(false);
-                  const nextBlock =
-                    result.document.blocks[
-                      Math.min(index, result.document.blocks.length - 1)
-                    ];
-                  if (nextBlock) {
-                    editor.selectBlock(nextBlock.id);
+                  const nextIndex = Math.min(
+                    result.removed.index,
+                    result.document.blocks.length - 1,
+                  );
+                  const nextEntry = result.document.blocks[nextIndex];
+                  const nextBlockId = nextEntry
+                    ? nextEntry.type === "row"
+                      ? nextEntry.blocks[0].id
+                      : nextEntry.id
+                    : null;
+                  if (nextBlockId) {
+                    editor.selectBlock(nextBlockId);
                     setFrameSelected(false);
-                    scheduleFocusById(blockSelectControlId(nextBlock.id));
+                    scheduleFocusById(blockSelectControlId(nextBlockId));
                   } else {
                     // Nothing left to select. Land on the profile header,
                     // which is the one region a page always has, rather than
@@ -690,6 +728,13 @@ export function DesktopMemberPageEditor(props: MemberPageEditorProps) {
                 },
                 onMove: (blockId, direction) => {
                   if (editor.moveBlock(blockId, direction)) {
+                    setFrameSelected(false);
+                    scheduleFocusById(blockSelectControlId(blockId));
+                  }
+                },
+                // Refocus the child because splitting replaces its row chrome.
+                onTakeOutOfRow: (blockId) => {
+                  if (editor.splitRow(blockId)) {
                     setFrameSelected(false);
                     scheduleFocusById(blockSelectControlId(blockId));
                   }
@@ -851,14 +896,15 @@ export function summarizeTransientRichTextValidation(
   const messages: string[] = [];
   const invalidBlockIds = new Set<string>();
   let firstBlockId: string | null = null;
-  for (let index = 0; index < document.blocks.length; index += 1) {
-    const block = document.blocks[index];
-    if (block.type !== "richText") continue;
-    const transient = transients[block.id];
+  for (const leaf of analyzeMemberPageEntries(document.blocks).leaves) {
+    if (leaf.block.type !== "richText") continue;
+    const transient = transients[leaf.id];
     if (!transient) continue;
-    firstBlockId ??= block.id;
-    invalidBlockIds.add(block.id);
-    messages.push(`Rich text, block ${index + 1}: ${transient.message}`);
+    firstBlockId ??= leaf.id;
+    invalidBlockIds.add(leaf.id);
+    messages.push(
+      `Rich text, block ${leaf.entryIndex + 1}: ${transient.message}`,
+    );
   }
 
   return {

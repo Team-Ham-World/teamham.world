@@ -30,6 +30,120 @@ function nestedBlockquotes(count: number): unknown {
 }
 
 describe("member V2 rich text", () => {
+  it("accepts stored alignments, canonicalizes left to omission, and leaves plain nodes unchanged", () => {
+    const result = parseRichTextDoc({
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          attrs: { textAlign: "center" },
+          content: [{ type: "text", text: "Centered" }],
+        },
+        {
+          type: "paragraph",
+          attrs: { textAlign: "left" },
+          content: [{ type: "text", text: "Left" }],
+        },
+        {
+          type: "heading",
+          attrs: { level: 2, textAlign: "right" },
+          content: [{ type: "text", text: "Aligned heading" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Plain" }],
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.doc.content).toEqual([
+      {
+        type: "paragraph",
+        attrs: { textAlign: "center" },
+        content: [{ type: "text", text: "Centered" }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "Left" }],
+      },
+      {
+        type: "heading",
+        attrs: { level: 2, textAlign: "right" },
+        content: [{ type: "text", text: "Aligned heading" }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: "Plain" }],
+      },
+    ]);
+    expect(parseRichTextDoc(result.doc)).toEqual(result);
+  });
+
+  it.each([
+    ["null", null],
+    ["justify", "justify"],
+    ["arbitrary string", "50%"],
+    ["number", 1],
+    ["object", { value: "center" }],
+  ])("rejects %s as a paragraph alignment", (_label, align) => {
+    expectRichFailure({
+      type: "doc",
+      content: [{
+        type: "paragraph",
+        attrs: { textAlign: align },
+        content: [{ type: "text", text: "No" }],
+      }],
+    }, ["content", 0, "attrs", "textAlign"]);
+  });
+
+  it("rejects alignment attribute shapes outside paragraph and heading textAlign", () => {
+    expectRichFailure({
+      type: "doc",
+      content: [{
+        type: "paragraph",
+        attrs: { style: "text-align: center" },
+        content: [{ type: "text", text: "No" }],
+      }],
+    }, ["content", 0, "attrs", "style"]);
+    expectRichFailure({
+      type: "doc",
+      content: [{
+        type: "bulletList",
+        attrs: { textAlign: "center" },
+        content: [{
+          type: "listItem",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "No" }] }],
+        }],
+      }],
+    }, ["content", 0, "attrs"]);
+    expectRichFailure({
+      type: "doc",
+      content: [{
+        type: "blockquote",
+        attrs: { textAlign: "right" },
+        content: [{
+          type: "paragraph",
+          content: [{ type: "text", text: "No" }],
+        }],
+      }],
+    }, ["content", 0, "attrs"]);
+    expect(parseRichTextDoc({
+      type: "doc",
+      content: [{
+        type: "bulletList",
+        content: [{
+          type: "listItem",
+          content: [{
+            type: "paragraph",
+            attrs: { textAlign: "right" },
+            content: [{ type: "text", text: "Nested" }],
+          }],
+        }],
+      }],
+    }).success).toBe(true);
+  });
+
   it("parses every allowed node and mark and canonicalizes text and mark order", () => {
     const doc = richTextFixture();
     const paragraph = doc.content[1];

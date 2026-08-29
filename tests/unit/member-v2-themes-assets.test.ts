@@ -16,7 +16,7 @@ import {
   resolveEnabledThemeAccent,
   type MemberThemeSemanticTokens,
 } from "@/lib/members/v2/themes";
-import { canonicalMemberPageDocument } from "../fixtures/member-v2/documents";
+import { canonicalMemberPageDocument, minimalMemberPageDocument } from "../fixtures/member-v2/documents";
 
 describe("member V2 themes and asset references", () => {
   it("registers exact Paper semantics and finite reviewed launch palettes", () => {
@@ -180,6 +180,42 @@ describe("member V2 themes and asset references", () => {
       "asset-gallery-2",
       "asset-gallery-3",
       "asset-gallery-4",
+    ]);
+  });
+
+  it("extracts asset IDs from blocks inside rows", () => {
+    const doc = minimalMemberPageDocument();
+    doc.blocks = [
+      {
+        type: "row",
+        ratio: "1:1",
+        blocks: [
+          {
+            id: "row-image",
+            type: "image",
+            variant: "framed",
+            image: { assetId: "asset-row-image", alt: "Row image", decorative: false },
+            caption: null,
+          },
+          {
+            id: "row-gallery",
+            type: "gallery",
+            variant: "grid",
+            items: [
+              {
+                id: "row-gallery-1",
+                image: { assetId: "asset-row-gallery", alt: null, decorative: true },
+                caption: null,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    expect(extractMemberPageAssetIds(doc)).toEqual([
+      "asset-row-image",
+      "asset-row-gallery",
     ]);
   });
 });

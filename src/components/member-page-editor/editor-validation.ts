@@ -1,4 +1,5 @@
 import type {
+  MemberBlock,
   MemberPageDocumentV2,
   MemberProjectRef,
 } from "@/lib/members/v2/document";
@@ -71,6 +72,26 @@ export function summarizeEditorValidation(
   };
 }
 
+function resolveBlockAtPath(
+  document: MemberPageDocumentV2,
+  error: MemberPageDocumentV2ValidationError,
+): { block: MemberBlock; path: readonly (string | number)[] } | null {
+  if (error.path[0] !== "blocks" || typeof error.path[1] !== "number") {
+    return null;
+  }
+  const entry = document.blocks[error.path[1]];
+  if (!entry) return null;
+
+  if (entry.type === "row") {
+    if (error.path[2] !== "blocks" || typeof error.path[3] !== "number") {
+      return null;
+    }
+    const block = entry.blocks[error.path[3]];
+    return block ? { block, path: error.path.slice(4) } : null;
+  }
+  return { block: entry, path: error.path.slice(2) };
+}
+
 /** Maps the shared validator path to the matching typed inspector control. */
 export function controlIdForError(
   document: MemberPageDocumentV2,
@@ -79,13 +100,10 @@ export function controlIdForError(
   if (error.path[0] === "frame") {
     return frameControlId(error.path.slice(1));
   }
-  if (error.path[0] !== "blocks" || typeof error.path[1] !== "number") {
-    return null;
-  }
 
-  const block = document.blocks[error.path[1]];
-  if (!block) return null;
-  const path = error.path.slice(2);
+  const resolved = resolveBlockAtPath(document, error);
+  if (!resolved) return null;
+  const { block, path } = resolved;
   const base = `block-${block.id}`;
 
   if (path[0] === "variant") return `${base}-variant`;
@@ -192,11 +210,10 @@ function targetForError(
   error: MemberPageDocumentV2ValidationError,
 ): EditorValidationTarget {
   if (error.path[0] === "frame") return { kind: "frame" };
-  if (error.path[0] !== "blocks" || typeof error.path[1] !== "number") {
-    return { kind: "frame" };
-  }
-  const block = document.blocks[error.path[1]];
-  return block ? { kind: "block", blockId: block.id } : { kind: "frame" };
+  const resolved = resolveBlockAtPath(document, error);
+  return resolved
+    ? { kind: "block", blockId: resolved.block.id }
+    : { kind: "frame" };
 }
 
 function describeValidationError(
@@ -206,11 +223,9 @@ function describeValidationError(
   if (error.path[0] === "frame") {
     return `${frameFieldLabel(error.path)}: ${plainValidationMessage(error.message)}`;
   }
-  if (error.path[0] === "blocks" && typeof error.path[1] === "number") {
-    const block = document.blocks[error.path[1]];
-    if (block) {
-      return `${blockTypeLabel(block.type)}, block ${error.path[1] + 1}: ${plainValidationMessage(error.message)}`;
-    }
+  const resolved = resolveBlockAtPath(document, error);
+  if (resolved && typeof error.path[1] === "number") {
+    return `${blockTypeLabel(resolved.block.type)}, block ${error.path[1] + 1}: ${plainValidationMessage(error.message)}`;
   }
   return `Page content: ${plainValidationMessage(error.message)}`;
 }

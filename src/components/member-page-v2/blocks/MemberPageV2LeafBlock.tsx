@@ -1,6 +1,9 @@
 import type { ReactElement } from "react";
 
 import type { ImageBlock, MemberBlock } from "@/lib/members/v2/document";
+import type {
+  MemberPageV2Placement,
+} from "../page-composition";
 import type { AssetMetadata } from "../MemberPageV2View";
 
 import { MemberPageV2RichText } from "./MemberPageV2RichText";
@@ -29,6 +32,42 @@ export const MEMBER_PAGE_PUBLIC_IMAGE_SIZES: MemberPageV2ImageSizes = {
   wide:
     "(min-width: 1024px) 960px, (min-width: 640px) calc(100vw - 4rem), calc(100vw - 2.5rem)",
 };
+
+/** Desktop column estimates in px for each row share, measured per surface. */
+export type MemberPageV2RowColumnPx = Record<
+  Exclude<MemberPageV2Placement, "full">,
+  number
+>;
+
+/**
+ * Public page columns at `lg`: the measured content width (960px) minus one
+ * `gap-14` gutter, split by the row ratio. Below `lg` a row is one
+ * full-width column, so the hints keep the full-width mobile segments.
+ */
+export const MEMBER_PAGE_PUBLIC_ROW_COLUMN_PX: MemberPageV2RowColumnPx = {
+  half: 452,
+  third: 301,
+  "two-thirds": 603,
+};
+
+/**
+ * Image `sizes` for one placement. `full` hands back the surface's own hints
+ * unchanged; a row placement swaps the `lg` segment for the assigned column
+ * while keeping the full-width mobile hints, because rows stack below `lg`.
+ * Each render surface supplies its own column measurements.
+ */
+export function memberPageV2ImageSizesForPlacement(
+  full: MemberPageV2ImageSizes,
+  columns: MemberPageV2RowColumnPx,
+  placement: MemberPageV2Placement,
+): MemberPageV2ImageSizes {
+  if (placement === "full") return full;
+  const column = columns[placement];
+  return {
+    framed: `(min-width: 1024px) ${column}px, calc(100vw - 2.5rem)`,
+    wide: `(min-width: 1024px) ${column}px, (min-width: 640px) calc(100vw - 4rem), calc(100vw - 2.5rem)`,
+  };
+}
 
 /**
  * What the two render paths may legitimately differ on. Nothing here changes

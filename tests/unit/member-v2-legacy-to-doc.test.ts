@@ -270,4 +270,18 @@ describe("legacy member content to V2 conversion", () => {
       blurb: "invalid\nbridge text",
     }, { ids: ids("unused") })).toThrow(TypeError);
   });
+
+  it("keeps producing leaf-only documents the row-aware parser accepts", () => {
+    const doc = legacyToDoc({
+      ...BASE,
+      showcase: { kind: "project", projectSlug: "untitled-quiz-show" },
+    }, { ids: ids("featured-fixed") });
+
+    expect(doc.blocks.every((block) => block.type !== "row")).toBe(true);
+    const parsed = parseMemberPageDocumentV2(doc);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) throw new Error(JSON.stringify(parsed.errors));
+    expect(doc).toEqual(parsed.doc);
+    expect(parsed.doc.blocks).toHaveLength(1);
+  });
 });

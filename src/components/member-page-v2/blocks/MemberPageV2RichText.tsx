@@ -1,7 +1,20 @@
-import type { RichTextBlock, RichTextDoc, RichTextBlockNode, RichTextText, RichTextMark } from "@/lib/members/v2/document";
+import type { RichTextBlock, RichTextDoc, RichTextBlockNode, RichTextText, RichTextMark, RichTextHeading, RichTextParagraph, RichTextStoredAlignment } from "@/lib/members/v2/document";
 
 interface MemberPageV2RichTextProps {
   block: RichTextBlock;
+}
+
+const ALIGN_CLASS: Record<RichTextStoredAlignment, string> = {
+  center: "text-center",
+  right: "text-right",
+};
+
+function withAlign(
+  classes: string,
+  node: RichTextParagraph | RichTextHeading,
+): string {
+  const align = node.attrs?.textAlign;
+  return align ? `${classes} ${ALIGN_CLASS[align]}` : classes;
 }
 
 export function MemberPageV2RichText({ block }: MemberPageV2RichTextProps) {
@@ -20,7 +33,10 @@ function renderBlockNode(node: RichTextBlockNode, key: React.Key): React.ReactNo
   switch (node.type) {
     case "paragraph":
       return (
-        <p key={key} className="mt-4 first:mt-0 leading-relaxed">
+        <p
+          key={key}
+          className={withAlign("mt-4 first:mt-0 leading-relaxed", node)}
+        >
           {node.content.map((text, idx) => renderTextNode(text, idx))}
         </p>
       );
@@ -29,7 +45,10 @@ function renderBlockNode(node: RichTextBlockNode, key: React.Key): React.ReactNo
         return (
           <h2
             key={key}
-            className="font-display text-2xl leading-tight mt-12 first:mt-0 sm:text-3xl"
+            className={withAlign(
+              "font-display text-2xl leading-tight mt-12 first:mt-0 sm:text-3xl",
+              node,
+            )}
           >
             {node.content.map((text, idx) => renderTextNode(text, idx))}
           </h2>
@@ -38,7 +57,10 @@ function renderBlockNode(node: RichTextBlockNode, key: React.Key): React.ReactNo
       return (
         <h3
           key={key}
-          className="font-display text-xl leading-tight mt-10 first:mt-0 sm:text-2xl"
+          className={withAlign(
+            "font-display text-xl leading-tight mt-10 first:mt-0 sm:text-2xl",
+            node,
+          )}
         >
           {node.content.map((text, idx) => renderTextNode(text, idx))}
         </h3>

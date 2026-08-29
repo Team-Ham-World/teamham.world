@@ -450,4 +450,170 @@ describe("member V2 document validation", () => {
     expect(ASSET_MAX_BYTES).toBe(5_242_880);
     expect(ASSET_MAX_DIMENSION).toBe(4_000);
   });
+
+  describe("two-block row entries", () => {
+    function calloutEntry(id: unknown): Record<string, unknown> {
+      return {
+        id,
+        type: "calloutQuote",
+        variant: "note",
+        text: `Text ${String(id)}`,
+        attribution: null,
+      };
+    }
+
+    function rowEntry(
+      leftId: unknown,
+      rightId: unknown,
+      ratio: unknown = "1:1",
+    ): Record<string, unknown> {
+      return {
+        type: "row",
+        ratio,
+        blocks: [calloutEntry(leftId), calloutEntry(rightId)],
+      };
+    }
+
+    function docWithEntries(entries: unknown[]): Record<string, unknown> {
+      const doc = minimalMemberPageDocument() as unknown as Record<string, unknown>;
+      doc.blocks = entries;
+      return doc;
+    }
+
+    it("parses a valid row and every supported ratio", () => {
+      for (const ratio of ["1:1", "1:2", "2:1"]) {
+        const doc = docWithEntries([calloutEntry("a"), rowEntry("b", "c", ratio)]);
+        const parsed = parseMemberPageDocumentV2(doc);
+        expect(parsed).toEqual({ success: true, doc });
+      }
+    });
+
+    it("parses all-leaf documents to deeply unchanged output", () => {
+      const doc = canonicalMemberPageDocument();
+      expect(parseMemberPageDocumentV2(structuredClone(doc))).toEqual({
+        success: true,
+        doc,
+      });
+    });
+
+    it("rejects unsupported ratios and malformed row shapes", () => {
+      const cases: Array<[unknown[], (string | number)[]]> = [
+        [[rowEntry("a", "b", "3:1")], ["blocks", 0, "ratio"]],
+        [[rowEntry("a", "b", 1)], ["blocks", 0, "ratio"]],
+        [[{ type: "row", ratio: "1:1", blocks: [calloutEntry("a")] }], ["blocks", 0, "blocks"]],
+        [[{
+          type: "row",
+          ratio: "1:1",
+          blocks: [calloutEntry("a"), calloutEntry("b"), calloutEntry("c")],
+        }], ["blocks", 0, "blocks"]],
+        [[{ type: "row", ratio: "1:1", blocks: [] }], ["blocks", 0, "blocks"]],
+        [[{ type: "row", ratio: "1:1" }], ["blocks", 0, "blocks"]],
+        [[{ type: "row", ratio: "1:1", blocks: "ab" }], ["blocks", 0, "blocks"]],
+        [[{ type: "row", ratio: "1:1", blocks: [calloutEntry("a"), calloutEntry("b")], key: "x" }], ["blocks", 0, "key"]],
+        [[rowEntry("a", "b", "1:1"), rowEntry("c", "d", "half")], ["blocks", 1, "ratio"]],
+      ];
+
+      for (const [entries, path] of cases) {
+        expectFailure(docWithEntries(entries), path);
+      }
+    });
+
+    it("rejects nested rows through the leaf-only child parser", () => {
+      const nested = {
+        type: "row",
+        ratio: "1:1",
+        blocks: [rowEntry("b", "c"), calloutEntry("d")],
+      };
+      expectFailure(docWithEntries([nested]), ["blocks", 0, "blocks", 0, "type"]);
+    });
+
+    it("rejects sparse row block arrays", () => {
+      const rightSlotMissing = new Array(2);
+      rightSlotMissing[0] = calloutEntry("a");
+      expectFailure(
+        docWithEntries([{ type: "row", ratio: "1:1", blocks: rightSlotMissing }]),
+        ["blocks", 0, "blocks", 1],
+      );
+
+      const bothSlotsMissing = new Array(2);
+      expectFailure(
+        docWithEntries([{ type: "row", ratio: "1:1", blocks: bothSlotsMissing }]),
+        ["blocks", 0, "blocks", 0],
+      );
+      expectFailure(
+        docWithEntries([{ type: "row", ratio: "1:1", blocks: bothSlotsMissing }]),
+        ["blocks", 0, "blocks", 1],
+      );
+    });
+
+    it("surfaces leaf errors at nested child paths", () => {
+      const badChild = {
+        type: "row",
+        ratio: "1:1",
+        blocks: [
+          calloutEntry("a"),
+          { id: "b", type: "calloutQuote", variant: "note", text: "", attribution: null },
+        ],
+      };
+      expectFailure(docWithEntries([badChild]), ["blocks", 0, "blocks", 1, "text"]);
+    });
+
+    it("rejects duplicate IDs across singles and both row children", () => {
+      expectFailure(
+        docWithEntries([calloutEntry("a"), rowEntry("a", "b")]),
+        ["blocks", 1, "blocks", 0, "id"],
+      );
+
+      expectFailure(
+        docWithEntries([
+          {
+            type: "row",
+            ratio: "1:1",
+            blocks: [calloutEntry("same"), calloutEntry("same")],
+          },
+        ]),
+        ["blocks", 0, "blocks", 1, "id"],
+      );
+    });
+
+    it("accepts six rows as twelve leaves and rejects a thirteenth leaf", () => {
+      const sixRows = Array.from({ length: 6 }, (_, index) =>
+        rowEntry(`left-${index}`, `right-${index}`),
+      );
+      const doc = docWithEntries(sixRows);
+      expect(parseMemberPageDocumentV2(doc)).toEqual({ success: true, doc });
+
+      expectFailure(
+        docWithEntries([...sixRows, calloutEntry("thirteenth")]),
+        ["blocks"],
+      );
+      expectFailure(
+        docWithEntries([...sixRows.slice(0, 5), rowEntry("l", "r"), rowEntry("m", "n")]),
+        ["blocks"],
+      );
+    });
+
+    it("counts featured projects inside rows against the one-project limit", () => {
+      function featured(id: string): Record<string, unknown> {
+        return {
+          id,
+          type: "featuredProject",
+          variant: "card",
+          project: { kind: "ham", projectSlug: "untitled-quiz-show" },
+        };
+      }
+
+      const oneInRow = docWithEntries([
+        calloutEntry("a"),
+        { type: "row", ratio: "1:1", blocks: [featured("f"), calloutEntry("b")] },
+      ]);
+      expect(parseMemberPageDocumentV2(oneInRow).success).toBe(true);
+
+      const twoInRows = docWithEntries([
+        { type: "row", ratio: "1:1", blocks: [featured("f1"), calloutEntry("b")] },
+        { type: "row", ratio: "1:1", blocks: [featured("f2"), calloutEntry("c")] },
+      ]);
+      expectFailure(twoInRows, ["blocks"]);
+    });
+  });
 });

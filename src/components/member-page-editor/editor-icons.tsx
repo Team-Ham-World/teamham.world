@@ -111,6 +111,15 @@ export function CloseIcon(props: IconProps) {
   );
 }
 
+export function ExtractIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="3" y="5" width="8" height="14" />
+      <path d="M15 7v10M19 7v10" />
+    </Icon>
+  );
+}
+
 export function PersonIcon(props: IconProps) {
   return (
     <Icon {...props}>

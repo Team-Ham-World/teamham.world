@@ -33,12 +33,17 @@ import {
   duplicateBlock,
   moveBlock,
   moveBlockToIndex,
+  pairBlocks,
   replaceBlock,
   restoreBlock,
+  setRowRatio,
+  splitRow,
+  swapRowSides,
   updateFrame,
   type BlockOperationResult,
 } from "./document-ops";
 import { createRandomIdGenerator, type MemberEditorIdGenerator } from "./ids";
+import type { MemberBlockRowRatio } from "@/lib/members/v2/document";
 
 export interface MemberEditorActions {
   autosave: (
@@ -265,11 +270,12 @@ export function useMemberPageEditor(options: UseMemberPageEditorOptions) {
           label: blockLabelFromResult(result.announcement),
         });
         if (selectedBlockId === blockId) {
-          const nextSelection =
-            result.document.blocks[
-              Math.min(result.removed.index, result.document.blocks.length - 1)
-            ]?.id ?? null;
-          setSelectedBlockId(nextSelection);
+          const nextIndex = Math.min(
+            result.removed.index,
+            result.document.blocks.length - 1,
+          );
+          const nextEntry = result.document.blocks[nextIndex];
+          setSelectedBlockId(nextLeafId(nextEntry));
         }
       }
       applyOperation(result);
@@ -301,6 +307,30 @@ export function useMemberPageEditor(options: UseMemberPageEditorOptions) {
 
     reorderBlock(blockId: string, targetIndex: number) {
       const result = moveBlockToIndex(documentRef.current, blockId, targetIndex);
+      if (applyOperation(result)) setSelectedBlockId(blockId);
+      return result;
+    },
+
+    pairBlocks(blockId: string, side: "previous" | "next") {
+      const result = pairBlocks(documentRef.current, blockId, side);
+      if (applyOperation(result)) setSelectedBlockId(blockId);
+      return result;
+    },
+
+    setRowRatio(blockId: string, ratio: MemberBlockRowRatio) {
+      const result = setRowRatio(documentRef.current, blockId, ratio);
+      if (applyOperation(result)) setSelectedBlockId(blockId);
+      return result;
+    },
+
+    swapRowSides(blockId: string) {
+      const result = swapRowSides(documentRef.current, blockId);
+      if (applyOperation(result)) setSelectedBlockId(blockId);
+      return result;
+    },
+
+    splitRow(blockId: string) {
+      const result = splitRow(documentRef.current, blockId);
       if (applyOperation(result)) setSelectedBlockId(blockId);
       return result;
     },
@@ -518,4 +548,11 @@ function actionFieldErrors(
 
 function blockLabelFromResult(announcement: string): string {
   return announcement.replace(/^Deleted /u, "").replace(/\. Undo.*$/u, "");
+}
+
+function nextLeafId(
+  entry: MemberPageDocumentV2["blocks"][number] | undefined,
+): string | null {
+  if (!entry) return null;
+  return entry.type === "row" ? entry.blocks[0].id : entry.id;
 }

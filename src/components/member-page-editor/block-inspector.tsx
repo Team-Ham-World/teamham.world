@@ -9,6 +9,7 @@ import type {
   GalleryBlock,
   ImageBlock,
   MemberBlock,
+  MemberBlockRowRatio,
   ProjectListBlock,
 } from "@/lib/members/v2/document";
 import {
@@ -54,6 +55,12 @@ export function BlockInspector({
   assets,
   richTextTransient,
   onRichTextTransientChange,
+  rowRatio = null,
+  pairingAvailability = null,
+  onPair,
+  onSetRatio,
+  onSwapSides,
+  onSplitRow,
 }: {
   block: MemberBlock;
   onChange: (block: MemberBlock) => void;
@@ -61,6 +68,12 @@ export function BlockInspector({
   assets: readonly EditorAsset[];
   richTextTransient?: RichTextTransientDraft;
   onRichTextTransientChange?: (draft: RichTextTransientDraft | null) => void;
+  rowRatio?: MemberBlockRowRatio | null;
+  pairingAvailability?: { previous: boolean; next: boolean } | null;
+  onPair?: (side: "previous" | "next") => void;
+  onSetRatio?: (ratio: MemberBlockRowRatio) => void;
+  onSwapSides?: () => void;
+  onSplitRow?: () => void;
 }) {
   const kind = editorBlockKind(block.type);
 
@@ -108,6 +121,78 @@ export function BlockInspector({
           />
         ) : null}
       </InspectorSection>
+
+      {rowRatio ? (
+        <InspectorSection
+          title="Row layout"
+          description="This block shares a row with a partner. Width changes apply to the whole row."
+        >
+          <SelectField
+            id={`block-${block.id}-row-ratio`}
+            label="Column widths"
+            value={rowRatio}
+            options={[
+              { value: "1:1", label: "Equal width" },
+              { value: "1:2", label: "Right wider" },
+              { value: "2:1", label: "Left wider" },
+            ]}
+            onChange={(value) => {
+              if (
+                value === "1:1" ||
+                value === "1:2" ||
+                value === "2:1"
+              ) {
+                onSetRatio?.(value);
+              }
+            }}
+          />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={EDITOR_CONTROL}
+              onClick={() => onSwapSides?.()}
+            >
+              Swap sides
+            </button>
+            <button
+              type="button"
+              className={EDITOR_CONTROL}
+              onClick={() => onSplitRow?.()}
+            >
+              Split row
+            </button>
+          </div>
+        </InspectorSection>
+      ) : null}
+
+      {pairingAvailability &&
+      (pairingAvailability.previous || pairingAvailability.next) ? (
+        <InspectorSection
+          title="Pair into a row"
+          description="Place this block beside a neighbouring block in a two-column row."
+        >
+          <div className="flex flex-wrap gap-2">
+            {pairingAvailability.previous ? (
+              <button
+                type="button"
+                className={EDITOR_CONTROL}
+                onClick={() => onPair?.("previous")}
+              >
+                Pair with previous
+              </button>
+            ) : null}
+            {pairingAvailability.next ? (
+              <button
+                type="button"
+                className={EDITOR_CONTROL}
+                onClick={() => onPair?.("next")}
+              >
+                Pair with next
+              </button>
+            ) : null}
+          </div>
+        </InspectorSection>
+      ) : null}
     </div>
   );
 }

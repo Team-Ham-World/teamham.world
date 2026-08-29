@@ -284,6 +284,23 @@ describe("legacy representability assessment", () => {
       path: ["blocks", 0, "type"],
     });
 
+    const rowDocument: MemberPageDocumentV2 = {
+      ...minimalMemberPageDocument(),
+      blocks: [{
+        type: "row",
+        ratio: "1:1",
+        blocks: [
+          { id: "left", type: "featuredProject", variant: "card", project: { kind: "ham", projectSlug: "untitled-quiz-show" } },
+          { id: "right", type: "calloutQuote", variant: "note", text: "Beside the project.", attribution: null },
+        ],
+      }],
+    };
+    expect(assessLegacyRepresentability(rowDocument)).toEqual({
+      outcome: "not-legacy-representable",
+      reason: "block-kind",
+      path: ["blocks", 0, "type"],
+    });
+
     const gallery: MemberPageDocumentV2 = {
       ...minimalMemberPageDocument(),
       blocks: [{

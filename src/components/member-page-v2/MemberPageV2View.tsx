@@ -5,7 +5,10 @@ import type { ResolvedMemberThemeAccent } from "@/lib/members/v2/themes";
 
 import { MemberPageV2Frame } from "./frame/MemberPageV2Frame";
 import { MemberPageV2Body } from "./blocks/MemberPageV2Body";
-import { MemberPageV2FeaturedProject } from "./blocks/MemberPageV2FeaturedProject";
+import {
+  MEMBER_PAGE_PUBLIC_IMAGE_SIZES,
+  renderMemberPageV2LeafBlock,
+} from "./blocks/MemberPageV2LeafBlock";
 import { MemberPageThemeStyle } from "./MemberPageThemeStyle";
 import { memberThemeStyle } from "./member-theme-presentation";
 import { composeMemberPageV2Layout } from "./page-composition";
@@ -35,7 +38,7 @@ export function MemberPageV2View({
   theme,
   assetMetadata,
 }: MemberPageV2ViewProps) {
-  const { layout, showcaseProject, bodyBlocks } =
+  const { layout, headerSlotBlock, bodyEntries } =
     composeMemberPageV2Layout(document);
 
   return (
@@ -49,7 +52,7 @@ export function MemberPageV2View({
       style={memberThemeStyle(theme)}
     >
       <MemberPageThemeStyle theme={theme} />
-      {showcaseProject ? (
+      {headerSlotBlock ? (
         <div
           className="lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-14"
           data-profile-showcase="true"
@@ -58,11 +61,16 @@ export function MemberPageV2View({
             frame={document.frame}
             assetMetadata={assetMetadata}
           />
-          <MemberPageV2FeaturedProject
-            block={showcaseProject}
-            assetMetadata={assetMetadata}
-            layout="showcase"
-          />
+          <div className="mt-16 lg:mt-0" data-header-slot="true">
+            {renderMemberPageV2LeafBlock(headerSlotBlock, {
+              assetMetadata,
+              imageSizes: MEMBER_PAGE_PUBLIC_IMAGE_SIZES,
+              featuredProjectLayout:
+                headerSlotBlock.type === "featuredProject"
+                  ? "showcase"
+                  : undefined,
+            })}
+          </div>
         </div>
       ) : (
         <MemberPageV2Frame
@@ -70,11 +78,9 @@ export function MemberPageV2View({
           assetMetadata={assetMetadata}
         />
       )}
-      {bodyBlocks.length > 0 ? (
-        <MemberPageV2Body blocks={bodyBlocks} assetMetadata={assetMetadata} />
+      {bodyEntries.length > 0 ? (
+        <MemberPageV2Body entries={bodyEntries} assetMetadata={assetMetadata} />
       ) : null}
     </div>
   );
 }
-
-export { getShowcaseProject } from "./page-composition";

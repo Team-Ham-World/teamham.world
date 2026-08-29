@@ -20,6 +20,7 @@ import {
 import { isMemberPageV2Cohort } from "@/lib/members/v2/feature-flag";
 import type { MemberImageRef } from "@/lib/members/v2/document";
 import { legacyToDoc } from "@/lib/members/v2/legacy-to-doc";
+import { analyzeMemberPageEntries } from "@/lib/members/v2/member-page-entries";
 import { assessLegacyRepresentability } from "@/lib/members/v2/legacy-representability";
 import { parseMemberPageDocumentV2 } from "@/lib/members/v2/validation";
 
@@ -208,7 +209,8 @@ function preservedExternalArtwork(
   const parsedDraft = parseMemberPageDocumentV2(draftDocument);
   if (!parsedDraft.success) return undefined;
 
-  for (const block of parsedDraft.doc.blocks) {
+  for (const leaf of analyzeMemberPageEntries(parsedDraft.doc.blocks).leaves) {
+    const block = leaf.block;
     if (block.type !== "featuredProject") continue;
     if (
       block.project.kind !== "external" ||

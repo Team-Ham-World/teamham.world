@@ -6,8 +6,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { blockOutlineSummary } from "@/components/member-page-editor/block-outline";
+import { BlockInspector } from "@/components/member-page-editor/block-inspector";
+import { BlockOutline } from "@/components/member-page-editor/block-outline";
 import { memberPageDndContextId } from "@/components/member-page-editor/dnd-config";
-import { EditorCanvas } from "@/components/member-page-editor/editor-canvas";
+import {
+  blockDragHandleId,
+  EditorCanvas,
+} from "@/components/member-page-editor/editor-canvas";
+import {
+  resolveDragTarget,
+} from "@/components/member-page-editor/sortable-editor-canvas";
 import {
   moveBlock,
   moveBlockToIndex,
@@ -30,7 +38,18 @@ import {
   POINTER_ACTIVATION_DISTANCE,
   SortableEditorCanvas,
 } from "@/components/member-page-editor/sortable-editor-canvas";
-import type { MemberBlock, MemberPageDocumentV2 } from "@/lib/members/v2/document";
+import type {
+  MemberBlock,
+  MemberBlockRow,
+  MemberBlockRowRatio,
+  MemberPageDocumentV2,
+  MemberPageEntry,
+} from "@/lib/members/v2/document";
+import {
+  analyzeMemberPageEntries,
+  rowEntryKey,
+} from "@/lib/members/v2/member-page-entries";
+import { MAX_BLOCKS } from "@/lib/members/v2/limits";
 import {
   getEnabledMemberThemes,
   resolveEnabledThemeAccent,
@@ -54,8 +73,12 @@ function callout(id: string): MemberBlock {
   };
 }
 
-function docWith(blocks: MemberBlock[]): MemberPageDocumentV2 {
-  return { ...minimalMemberPageDocument(), blocks };
+function docWith(blocks: readonly MemberPageEntry[]): MemberPageDocumentV2 {
+  return { ...minimalMemberPageDocument(), blocks: [...blocks] };
+}
+
+function entryLeafId(entry: MemberPageEntry): string {
+  return entry.type === "row" ? entry.blocks[0].id : entry.id;
 }
 
 const CANVAS_CALLBACKS = {
@@ -64,6 +87,7 @@ const CANVAS_CALLBACKS = {
   onDuplicate: () => undefined,
   onDelete: () => undefined,
   onMove: () => undefined,
+  onTakeOutOfRow: () => undefined,
 };
 
 function focusedElement(connected = true) {
@@ -87,8 +111,8 @@ describe("sortable editor enhancement", () => {
     const secondDown = moveBlock(firstDown.document, "a", "down");
     expect(secondDown.status).toBe("ok");
     if (secondDown.status !== "ok") return;
-    expect(pointerDrop.document.blocks.map((block) => block.id)).toEqual(
-      secondDown.document.blocks.map((block) => block.id),
+    expect(pointerDrop.document.blocks.map(entryLeafId)).toEqual(
+      secondDown.document.blocks.map(entryLeafId),
     );
 
     const keyboardDrop = moveBlockToIndex(original, "c", 0);
@@ -99,8 +123,8 @@ describe("sortable editor enhancement", () => {
     const secondUp = moveBlock(firstUp.document, "c", "up");
     expect(secondUp.status).toBe("ok");
     if (secondUp.status !== "ok") return;
-    expect(keyboardDrop.document.blocks.map((block) => block.id)).toEqual(
-      secondUp.document.blocks.map((block) => block.id),
+    expect(keyboardDrop.document.blocks.map(entryLeafId)).toEqual(
+      secondUp.document.blocks.map(entryLeafId),
     );
   });
 
@@ -112,13 +136,7 @@ describe("sortable editor enhancement", () => {
         theme={resolvedTheme}
         assetMetadata={new Map()}
         selection={{ kind: "block", blockId: "a" }}
-        callbacks={{
-          onSelectFrame: () => undefined,
-          onSelectBlock: () => undefined,
-          onDuplicate: () => undefined,
-          onDelete: () => undefined,
-          onMove: () => undefined,
-        }}
+        callbacks={{ ...CANVAS_CALLBACKS }}
         interactive
         dndContextId={contextId}
         onReorder={() => undefined}
@@ -259,15 +277,21 @@ describe("showcase canvas parity", () => {
       />,
     );
 
-    expect(html).toContain('data-member-layout="blocks"');
-    expect(html).not.toContain("data-profile-showcase");
+    expect(html).toContain('data-member-layout="showcase"');
+    expect(html).toContain('data-profile-showcase="true"');
     expect(html).toContain('data-featured-project-layout="standard"');
   });
 
   it("keeps a page that opens with anything else in normal block flow", () => {
     const html = renderToStaticMarkup(
       <EditorCanvas
-        document={docWith([callout("first-note")])}
+        document={docWith([
+          {
+            type: "row",
+            ratio: "1:1",
+            blocks: [callout("first-note"), callout("second-note")],
+          },
+        ])}
         theme={resolvedTheme}
         assetMetadata={new Map()}
         selection={null}
@@ -663,5 +687,312 @@ describe("block outline", () => {
     expect(blockOutlineSummary(callout("a"))).not.toBe(
       blockOutlineSummary(callout("b")),
     );
+  });
+});
+
+describe("row editor integration", () => {
+  function rowOf(
+    leftId: string,
+    rightId: string,
+    ratio: MemberBlockRowRatio = "1:1",
+  ): MemberBlockRow {
+    return {
+      type: "row",
+      ratio,
+      blocks: [callout(leftId), callout(rightId)],
+    };
+  }
+
+  function docWithEntries(entries: MemberPageEntry[]): MemberPageDocumentV2 {
+    return { ...minimalMemberPageDocument(), blocks: [...entries] };
+  }
+
+  it("renders one sortable target per row with both children selectable", () => {
+    const row = rowOf("a", "b");
+    const html = renderToStaticMarkup(
+      <SortableEditorCanvas
+        document={docWithEntries([
+          rowOf("a", "b"),
+          callout("c"),
+        ])}
+        theme={resolvedTheme}
+        assetMetadata={new Map()}
+        selection={null}
+        callbacks={CANVAS_CALLBACKS}
+        interactive
+        dndContextId={memberPageDndContextId("hamfriend")}
+        onReorder={() => undefined}
+        onAnnounce={() => undefined}
+      />,
+    );
+
+    expect(
+      html.match(/Drag Two-block row, current position 1 of 2/g),
+    ).toHaveLength(1);
+    expect(html.match(/-drag-handle"/g)).toHaveLength(2);
+    expect(html).toContain(
+      `data-sortable-block-id="${rowEntryKey(row).replace(/"/g, "&quot;")}"`,
+    );
+    expect(html).toContain("Two-block row, position 1 of 2");
+    expect(html).toContain("Edit Callout or quote, position 1 of 2");
+    expect(html).toMatch(/aria-label="Delete Callout or quote"/);
+    expect(
+      html.match(/disabled=""[^>]*aria-label="Move Two-block row up"/gu),
+    ).toHaveLength(1);
+    expect(html.match(/aria-label="Duplicate Two-block row"/gu)).toHaveLength(1);
+    expect(html.match(/aria-label="Move Callout or quote up"/gu)).toHaveLength(1);
+    expect(html.match(/aria-label="Duplicate Callout or quote"/gu)).toHaveLength(1);
+  });
+
+  it("drags standalone leaves under their descriptor key, not their raw id", () => {
+    const document = docWithEntries([callout("a"), callout("b")]);
+    const standaloneKey = analyzeMemberPageEntries(document.blocks).entries[0]
+      .key;
+
+    const html = renderToStaticMarkup(
+      <SortableEditorCanvas
+        document={document}
+        theme={resolvedTheme}
+        assetMetadata={new Map()}
+        selection={null}
+        callbacks={CANVAS_CALLBACKS}
+        interactive
+        dndContextId={memberPageDndContextId("hamfriend")}
+        onReorder={() => undefined}
+        onAnnounce={() => undefined}
+      />,
+    );
+
+    // Real dnd-kit registration and reorder behavior is covered by Playwright.
+    expect(html).toContain(
+      `id="${blockDragHandleId(standaloneKey).replace(/"/g, "&quot;")}"`,
+    );
+    expect(html).not.toContain('id="member-page-block-a-drag-handle"');
+    expect(html).toContain(
+      `data-sortable-block-id="${standaloneKey.replace(/"/g, "&quot;")}"`,
+    );
+  });
+
+  it("keeps explicit up and down controls for rows without drag-and-drop", () => {
+    const html = renderToStaticMarkup(
+      <EditorCanvas
+        document={docWithEntries([rowOf("a", "b"), callout("c")])}
+        theme={resolvedTheme}
+        assetMetadata={new Map()}
+        selection={null}
+        callbacks={CANVAS_CALLBACKS}
+        interactive
+      />,
+    );
+
+    expect(html).not.toContain("-drag-handle");
+    expect(html).toContain("Move Two-block row up");
+    expect(html).toContain("Move Two-block row down");
+    expect(html).toMatch(/aria-label="Duplicate Two-block row"/);
+    expect(html.match(/aria-label="Move Callout or quote up"/gu)).toHaveLength(1);
+    expect(html.match(/aria-label="Duplicate Callout or quote"/gu)).toHaveLength(1);
+  });
+
+  it("offers Take out on row children only, with the exact accessible name", () => {
+    const html = renderToStaticMarkup(
+      <EditorCanvas
+        document={docWithEntries([
+          rowOf("a", "b"),
+          callout("c"),
+        ])}
+        theme={resolvedTheme}
+        assetMetadata={new Map()}
+        selection={null}
+        callbacks={CANVAS_CALLBACKS}
+        interactive
+      />,
+    );
+
+    expect(html.match(/aria-label="Take Callout or quote out of row"/gu)).toHaveLength(2);
+    expect(html.match(/>Take out<\/span>/gu)).toHaveLength(2);
+
+    const standaloneHtml = renderToStaticMarkup(
+      <EditorCanvas
+        document={docWithEntries([callout("a"), callout("b")])}
+        theme={resolvedTheme}
+        assetMetadata={new Map()}
+        selection={null}
+        callbacks={CANVAS_CALLBACKS}
+        interactive
+      />,
+    );
+    expect(standaloneHtml).not.toContain("out of row");
+    expect(standaloneHtml).not.toContain("Take out");
+  });
+
+  it("keeps the inspector's Split row control and adds no second one", () => {
+    const html = renderToStaticMarkup(
+      <BlockInspector
+        block={callout("a")}
+        onChange={() => undefined}
+        nextId={() => "next"}
+        assets={[]}
+        rowRatio="1:1"
+        onSetRatio={() => undefined}
+        onSwapSides={() => undefined}
+        onSplitRow={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Split row");
+    expect(html).not.toContain("Take out");
+  });
+
+  it("resolves a row drag to a representative child before mutations", () => {
+    const entries = [rowOf("a", "b"), callout("c")];
+    const entry = entries[0];
+    if (entry.type !== "row") throw new Error("expected row fixture");
+    const key = rowEntryKey(entry);
+
+    const byKey = resolveDragTarget(entries, key);
+    expect(byKey).toMatchObject({
+      representativeId: "a",
+      index: 0,
+      total: 2,
+      label: "Two-block row",
+    });
+
+    const byLeaf = resolveDragTarget(entries, "c");
+    expect(byLeaf).toMatchObject({
+      representativeId: "c",
+      index: 1,
+      total: 2,
+      label: "Callout or quote",
+    });
+
+    expect(resolveDragTarget(entries, "missing")).toBeNull();
+  });
+
+  it("exposes the row ratio, swap, and split through the inspector", () => {
+    const html = renderToStaticMarkup(
+      <BlockInspector
+        block={callout("a")}
+        onChange={() => undefined}
+        nextId={() => "next"}
+        assets={[]}
+        rowRatio="1:2"
+        onSetRatio={() => undefined}
+        onSwapSides={() => undefined}
+        onSplitRow={() => undefined}
+      />,
+    );
+
+    expect(html).toContain("Row layout");
+    expect(html).toContain('id="block-a-row-ratio"');
+    expect(html).toContain('<option value="1:2" selected="">');
+    expect(html).toContain("Equal width");
+    expect(html).toContain("Left wider");
+    expect(html).toContain("Right wider");
+    expect(html).toContain("Swap sides");
+    expect(html).toContain("Split row");
+  });
+
+  it("offers pairing only towards standalone neighbours", () => {
+    const bothSides = renderToStaticMarkup(
+      <BlockInspector
+        block={callout("a")}
+        onChange={() => undefined}
+        nextId={() => "next"}
+        assets={[]}
+        pairingAvailability={{ previous: true, next: true }}
+        onPair={() => undefined}
+      />,
+    );
+    expect(bothSides).toContain("Pair with previous");
+    expect(bothSides).toContain("Pair with next");
+
+    const nextOnly = renderToStaticMarkup(
+      <BlockInspector
+        block={callout("a")}
+        onChange={() => undefined}
+        nextId={() => "next"}
+        assets={[]}
+        pairingAvailability={{ previous: false, next: true }}
+        onPair={() => undefined}
+      />,
+    );
+    expect(nextOnly).not.toContain("Pair with previous");
+    expect(nextOnly).toContain("Pair with next");
+
+    const neither = renderToStaticMarkup(
+      <BlockInspector
+        block={callout("a")}
+        onChange={() => undefined}
+        nextId={() => "next"}
+        assets={[]}
+        pairingAvailability={{ previous: false, next: false }}
+        onPair={() => undefined}
+      />,
+    );
+    expect(neither).not.toContain("Pair with");
+    expect(neither).not.toContain("Row layout");
+  });
+
+  it("resolves nested row validation paths to the correct leaf control", () => {
+    const document = docWithEntries([
+      rowOf("a", "b"),
+      {
+        id: "links",
+        type: "additionalLinks",
+        variant: "list",
+        links: [
+          { id: "docs", label: "", url: "https://example.com", description: null },
+        ],
+      },
+    ]);
+
+    expect(
+      controlIdForError(document, {
+        path: ["blocks", 0, "blocks", 1, "text"],
+        message: "Must be non-empty.",
+      }),
+    ).toBe("block-b-text");
+    expect(
+      controlIdForError(document, {
+        path: ["blocks", 1, "links", 0, "label"],
+        message: "Must be non-empty.",
+      }),
+    ).toBe("block-links-link-docs-label");
+
+    const summary = summarizeEditorValidation(
+      docWithEntries([
+        rowOf("a", "b"),
+        {
+          id: "broken",
+          type: "calloutQuote",
+          variant: "note",
+          text: "",
+          attribution: null,
+        },
+      ]),
+    );
+    expect(summary.firstTarget).toEqual({ kind: "block", blockId: "broken" });
+  });
+
+  it("groups a row as one numbered outline entry with both children selectable", () => {
+    const rows = Array.from({ length: 6 }, (_, i) => rowOf(`l${i}`, `r${i}`));
+    const html = renderToStaticMarkup(
+      <BlockOutline
+        document={docWithEntries(rows)}
+        selection={{ kind: "block", blockId: "r0" }}
+        invalidBlockIds={new Set()}
+        frameInvalid={false}
+        canAddBlock={false}
+        onSelectFrame={() => undefined}
+        onSelectBlock={() => undefined}
+        onAddBlock={() => undefined}
+      />,
+    );
+
+    expect(html.match(/Two-block row/g)).toHaveLength(6);
+    expect(html).toContain("Text l0");
+    expect(html).toContain("Text r5");
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain(`${MAX_BLOCKS} of ${MAX_BLOCKS} blocks used`);
   });
 });

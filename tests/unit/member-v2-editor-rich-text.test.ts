@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { buildRichTextBlock } from "@/components/member-page-editor/block-catalog";
 import { summarizeTransientRichTextValidation } from "@/components/member-page-editor/editor-shell";
+import type { MemberBlock } from "@/lib/members/v2/document";
 import {
   canonicalRichTextToTipTapJson,
   evaluateTipTapEdit,
@@ -177,7 +178,7 @@ describe("TipTap to canonical rich-text adapter", () => {
     },
   );
 
-  it("rejects unsupported non-null node and mark attributes", () => {
+  it("stores alignment through the adapter and keeps unlisted attributes rejected", () => {
     expect(
       tipTapJsonToCanonical({
         type: "doc",
@@ -185,6 +186,29 @@ describe("TipTap to canonical rich-text adapter", () => {
           {
             type: "paragraph",
             attrs: { textAlign: "center" },
+            content: [{ type: "text", text: "Centered" }],
+          },
+        ],
+      }),
+    ).toMatchObject({
+      success: true,
+      doc: {
+        content: [
+          {
+            type: "paragraph",
+            attrs: { textAlign: "center" },
+            content: [{ type: "text", text: "Centered" }],
+          },
+        ],
+      },
+    });
+    expect(
+      tipTapJsonToCanonical({
+        type: "doc",
+        content: [
+          {
+            type: "paragraph",
+            attrs: { editorDecoration: "wavy" },
             content: [{ type: "text", text: "No" }],
           },
         ],
@@ -299,6 +323,57 @@ describe("TipTap to canonical rich-text adapter", () => {
     expect(summarizeTransientRichTextValidation(document, {})).toMatchObject({
       messages: [],
       firstTarget: null,
+    });
+  });
+
+  it("finds transient rich text inside a row and names the row's position", () => {
+    const editorJson = {
+      type: "doc",
+      content: [{ type: "paragraph" }],
+    };
+    const empty = evaluateTipTapEdit(editorJson);
+    if (empty.status !== "invalid") return;
+
+    const document = {
+      ...minimalMemberPageDocument(),
+      blocks: [
+        {
+          id: "standalone",
+          type: "calloutQuote" as const,
+          variant: "note" as const,
+          text: "Nothing to edit.",
+          attribution: null,
+        },
+        {
+          type: "row" as const,
+          ratio: "1:1" as const,
+          blocks: [
+            { id: "row-rich", type: "richText" as const, content: richTextFixture() },
+            {
+              id: "row-mate",
+              type: "calloutQuote" as const,
+              variant: "note" as const,
+              text: "The other side.",
+              attribution: null,
+            },
+          ] as [MemberBlock, MemberBlock],
+        },
+      ],
+    };
+
+    expect(
+      summarizeTransientRichTextValidation(document, {
+        "row-rich": {
+          editorJson: empty.editorJson,
+          message: empty.message,
+        },
+      }),
+    ).toMatchObject({
+      messages: [
+        "Rich text, block 2: Add some text before this block can save.",
+      ],
+      firstTarget: { kind: "block", blockId: "row-rich" },
+      firstControlId: "block-row-rich-rich-text",
     });
   });
 });

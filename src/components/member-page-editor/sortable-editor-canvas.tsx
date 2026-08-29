@@ -22,12 +22,18 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+import type { MemberPageDocumentV2 } from "@/lib/members/v2/document";
+import { analyzeMemberPageEntries } from "@/lib/members/v2/member-page-entries";
+
 import { blockTypeLabel } from "./document-ops";
 import {
+  MEMBER_ROW_ENTRY_LABEL,
   blockDragHandleId,
   CanvasBlockChrome,
+  CanvasRowChrome,
   EditorCanvas,
   type CanvasBlockContainerProps,
+  type CanvasRowContainerProps,
   type EditorCanvasProps,
 } from "./editor-canvas";
 import { EDITOR_ICON_CONTROL } from "./editor-controls";
@@ -46,10 +52,46 @@ const SILENT_DND_ANNOUNCEMENTS: Announcements = {
 };
 
 export interface SortableEditorCanvasProps
-  extends Omit<EditorCanvasProps, "BlockContainer"> {
+  extends Omit<EditorCanvasProps, "BlockContainer" | "RowContainer"> {
   dndContextId: string;
   onReorder: (blockId: string, targetIndex: number) => void;
   onAnnounce: (message: string) => void;
+}
+
+export interface ResolvedDragTarget {
+  /** React/DnD identity of the entry: a leaf ID or the row's descriptor key. */
+  key: string;
+  /** The leaf ID the leaf-based mutation APIs accept for this entry. */
+  representativeId: string;
+  label: string;
+  index: number;
+  total: number;
+}
+
+/**
+ * Resolves a DnD ID (a leaf ID or a row's descriptor key) to its entry.
+ *
+ * Rows have no ID of their own, so dragging one resolves to its first child
+ * before any mutation API is called; the row still travels as one entry.
+ */
+export function resolveDragTarget(
+  entries: MemberPageDocumentV2["blocks"],
+  dragId: string,
+): ResolvedDragTarget | null {
+  const analysis = analyzeMemberPageEntries(entries);
+  const descriptor =
+    analysis.entries.find((candidate) => candidate.key === dragId) ??
+    analysis.entryDescriptorFor(dragId);
+  if (!descriptor) return null;
+  const entry = descriptor.entry;
+  return {
+    key: descriptor.key,
+    representativeId: descriptor.leafIds[0],
+    label:
+      entry.type === "row" ? MEMBER_ROW_ENTRY_LABEL : blockTypeLabel(entry.type),
+    index: descriptor.index,
+    total: entries.length,
+  };
 }
 
 /**
@@ -82,24 +124,17 @@ export function SortableEditorCanvas({
     [],
   );
 
-  function blockDetails(id: string) {
-    const index = document.blocks.findIndex((block) => block.id === id);
-    const block = document.blocks[index];
-    return block
-      ? {
-          label: blockTypeLabel(block.type),
-          position: index + 1,
-          total: document.blocks.length,
-        }
-      : null;
-  }
+  const entryKeys = useMemo(
+    () => analyzeMemberPageEntries(document.blocks).entries.map((e) => e.key),
+    [document.blocks],
+  );
 
   function announceStart(event: DragStartEvent): void {
-    const details = blockDetails(String(event.active.id));
-    if (!details) return;
-    lastOverId.current = String(event.active.id);
+    const target = resolveDragTarget(document.blocks, String(event.active.id));
+    if (!target) return;
+    lastOverId.current = target.key;
     onAnnounce(
-      dragStartAnnouncement(details.label, details.position, details.total),
+      dragStartAnnouncement(target.label, target.index + 1, target.total),
     );
   }
 
@@ -108,36 +143,57 @@ export function SortableEditorCanvas({
     const overId = event.over ? String(event.over.id) : null;
     if (!overId || overId === lastOverId.current) return;
     lastOverId.current = overId;
-    const active = blockDetails(activeId);
-    const over = blockDetails(overId);
+    const active = resolveDragTarget(document.blocks, activeId);
+    const over = resolveDragTarget(document.blocks, overId);
     if (!active || !over) return;
-    onAnnounce(dragOverAnnouncement(active.label, over.position, over.total));
+    onAnnounce(
+      dragOverAnnouncement(active.label, over.index + 1, over.total),
+    );
   }
 
   function finishDrag(event: DragEndEvent): void {
-    const activeId = String(event.active.id);
-    const overId = event.over ? String(event.over.id) : null;
+    const activeTarget = resolveDragTarget(
+      document.blocks,
+      String(event.active.id),
+    );
     lastOverId.current = null;
-    const active = blockDetails(activeId);
-    if (!active) return;
+    if (!activeTarget) return;
+    const overId = event.over ? String(event.over.id) : null;
     if (!overId) {
-      onAnnounce(dragCancelAnnouncement(active.label, active.position, active.total));
+      onAnnounce(
+        dragCancelAnnouncement(
+          activeTarget.label,
+          activeTarget.index + 1,
+          activeTarget.total,
+        ),
+      );
       return;
     }
-    const targetIndex = document.blocks.findIndex((block) => block.id === overId);
-    if (targetIndex < 0) return;
-    if (overId === activeId) {
-      onAnnounce(dragStayedAnnouncement(active.label, active.position, active.total));
+    const overTarget = resolveDragTarget(document.blocks, overId);
+    if (!overTarget) return;
+    if (overTarget.key === activeTarget.key) {
+      onAnnounce(
+        dragStayedAnnouncement(
+          activeTarget.label,
+          activeTarget.index + 1,
+          activeTarget.total,
+        ),
+      );
       return;
     }
-    onReorder(activeId, targetIndex);
+    onReorder(activeTarget.representativeId, overTarget.index);
   }
 
   function cancelDrag(event: DragCancelEvent): void {
     lastOverId.current = null;
-    const active = blockDetails(String(event.active.id));
-    if (!active) return;
-    onAnnounce(dragCancelAnnouncement(active.label, active.position, active.total));
+    const target = resolveDragTarget(
+      document.blocks,
+      String(event.active.id),
+    );
+    if (!target) return;
+    onAnnounce(
+      dragCancelAnnouncement(target.label, target.index + 1, target.total),
+    );
   }
 
   return (
@@ -170,13 +226,14 @@ export function SortableEditorCanvas({
           cancel. Move up and Move down buttons are always available instead.
         </p>
         <SortableContext
-          items={document.blocks.map((block) => block.id)}
+          items={entryKeys}
           strategy={verticalListSortingStrategy}
         >
           <EditorCanvas
             {...canvasProps}
             document={document}
             BlockContainer={SortableCanvasBlockContainer}
+            RowContainer={SortableCanvasRowContainer}
           />
         </SortableContext>
       </DndContext>
@@ -196,7 +253,7 @@ function SortableCanvasBlockContainer(props: CanvasBlockContainerProps) {
     transition,
     isDragging,
   } = useSortable({
-    id: props.block.id,
+    id: props.entryKey,
     disabled: !props.interactive,
     data: { label, position: props.position, total: props.total },
     transition: reducedMotion ? null : undefined,
@@ -227,11 +284,63 @@ function SortableCanvasBlockContainer(props: CanvasBlockContainerProps) {
           {...attributes}
           {...listeners}
           ref={setActivatorNodeRef}
-          id={blockDragHandleId(props.block.id)}
+          id={blockDragHandleId(props.entryKey)}
           type="button"
           className={`${EDITOR_ICON_CONTROL} touch-none cursor-grab active:cursor-grabbing`}
           aria-describedby={DND_INSTRUCTIONS_ID}
           aria-label={`Drag ${label}, current position ${props.position} of ${props.total}`}
+        >
+          <GripIcon />
+          <span className="sr-only">Drag</span>
+        </button>
+      }
+    />
+  );
+}
+
+function SortableCanvasRowContainer(props: CanvasRowContainerProps) {
+  const reducedMotion = useReducedMotion();
+  const {
+    attributes,
+    listeners,
+    setActivatorNodeRef,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: props.entryKey,
+    disabled: !props.interactive,
+    data: {
+      label: MEMBER_ROW_ENTRY_LABEL,
+      position: props.position,
+      total: props.total,
+    },
+    transition: reducedMotion ? null : undefined,
+    animateLayoutChanges: reducedMotion ? () => false : undefined,
+  });
+
+  if (!props.interactive) return <div>{props.children}</div>;
+
+  return (
+    <CanvasRowChrome
+      {...props}
+      containerRef={setNodeRef}
+      dragging={isDragging}
+      containerStyle={{
+        transform: CSS.Translate.toString(transform),
+        transition: reducedMotion ? undefined : transition,
+      }}
+      dragHandle={
+        <button
+          {...attributes}
+          {...listeners}
+          ref={setActivatorNodeRef}
+          id={blockDragHandleId(props.entryKey)}
+          type="button"
+          className={`${EDITOR_ICON_CONTROL} touch-none cursor-grab active:cursor-grabbing`}
+          aria-describedby={DND_INSTRUCTIONS_ID}
+          aria-label={`Drag ${MEMBER_ROW_ENTRY_LABEL}, current position ${props.position} of ${props.total}`}
         >
           <GripIcon />
           <span className="sr-only">Drag</span>

@@ -149,8 +149,18 @@ import {
   type MemberEditorActions,
   type UseMemberPageEditorOptions,
 } from "@/components/member-page-editor/use-member-page-editor";
-import type { MemberBlock, MemberPageDocumentV2 } from "@/lib/members/v2/document";
+import type {
+  MemberBlock,
+  MemberBlockRow,
+  MemberBlockRowRatio,
+  MemberPageDocumentV2,
+  MemberPageEntry,
+} from "@/lib/members/v2/document";
 import { parseMemberPageDocumentV2 } from "@/lib/members/v2/validation";
+
+function entryLeafId(entry: MemberPageEntry): string {
+  return entry.type === "row" ? entry.blocks[0].id : entry.id;
+}
 
 import {
   externalProject,
@@ -803,7 +813,7 @@ describe("member page editor lifecycle and transitions", () => {
     afterAdd.undoDelete();
     const afterUndo = renderEditor(options);
 
-    expect(afterUndo.document.blocks.map((block) => block.id)).toEqual([
+    expect(afterUndo.document.blocks.map(entryLeafId)).toEqual([
       "new-featured",
     ]);
     expect(afterUndo.announcement).toMatch(/one featured project/i);
@@ -812,7 +822,7 @@ describe("member page editor lifecycle and transitions", () => {
 
     expect(autosave).toHaveBeenCalledOnce();
     const savedDocument = autosave.mock.calls[0][0].document;
-    expect(savedDocument.blocks.map((block) => block.id)).toEqual([
+    expect(savedDocument.blocks.map(entryLeafId)).toEqual([
       "new-featured",
     ]);
     expect(parseMemberPageDocumentV2(savedDocument).success).toBe(true);
@@ -829,7 +839,7 @@ describe("member page editor lifecycle and transitions", () => {
       blocks: [featuredBlock("same")],
     };
     const editor = renderEditor(createOptions(actions, { initialDocument }));
-    const existing = editor.document.blocks[0];
+    const existing = editor.document.blocks[0] as MemberBlock;
 
     editor.updateBlock(structuredClone(existing));
     await vi.advanceTimersByTimeAsync(5_000);
@@ -891,5 +901,207 @@ describe("member page editor lifecycle and transitions", () => {
 
     expect(preventDefault).toHaveBeenCalledOnce();
     expect(event.returnValue).toBe("");
+  });
+
+  describe("rows", () => {
+    function rowOf(
+      leftId: string,
+      rightId: string,
+      ratio: MemberBlockRowRatio = "1:1",
+    ): MemberBlockRow {
+      return {
+        type: "row",
+        ratio,
+        blocks: [calloutBlock(leftId), calloutBlock(rightId)],
+      };
+    }
+
+    function docWithEntries(entries: MemberPageEntry[]): MemberPageDocumentV2 {
+      return { ...minimalMemberPageDocument(), blocks: entries };
+    }
+
+    it("pairs a standalone block with a standalone neighbour and keeps it selected", () => {
+      const actions = createActions();
+      const options = createOptions(actions, {
+        initialDocument: docWithEntries([
+          calloutBlock("a"),
+          calloutBlock("b"),
+          calloutBlock("c"),
+        ]),
+      });
+
+      let editor = renderEditor(options);
+      editor.selectBlock("b");
+      editor = renderEditor(options);
+      const result = editor.pairBlocks("b", "previous");
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect(result.document.blocks.map((entry) => entry.type)).toEqual([
+        "row",
+        "calloutQuote",
+      ]);
+      const [first] = result.document.blocks;
+      if (first.type !== "row") throw new Error("expected a row");
+      expect(first.blocks.map((block) => block.id)).toEqual(["a", "b"]);
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe("b");
+      expect(editor.announcement).toMatch(/paired/i);
+    });
+
+    it("announces ratio, swap, and split while keeping the selection", () => {
+      const actions = createActions();
+      const options = createOptions(actions, {
+        initialDocument: docWithEntries([rowOf("a", "b")]),
+      });
+
+      let editor = renderEditor(options);
+      editor.selectBlock("b");
+      editor = renderEditor(options);
+
+      const ratio = editor.setRowRatio("b", "1:2");
+      expect(ratio.status).toBe("ok");
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe("b");
+      expect(editor.announcement).toMatch(/width to 1:2/u);
+      const [ratioed] = editor.document.blocks;
+      if (ratioed.type !== "row") throw new Error("expected a row");
+      expect(ratioed.ratio).toBe("1:2");
+
+      const swapped = editor.swapRowSides("b");
+      expect(swapped.status).toBe("ok");
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe("b");
+      expect(editor.announcement).toMatch(/swapped/i);
+      const [swappedRow] = editor.document.blocks;
+      if (swappedRow.type !== "row") throw new Error("expected a row");
+      expect(swappedRow.blocks.map((block) => block.id)).toEqual(["b", "a"]);
+
+      const split = editor.splitRow("b");
+      expect(split.status).toBe("ok");
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe("b");
+      expect(editor.announcement).toMatch(/split/i);
+      expect(editor.document.blocks.map(entryLeafId)).toEqual(["b", "a"]);
+    });
+
+    it("takes a block out of a row from either child and keeps [left, right] order", async () => {
+      const autosave = vi.fn(
+        async ({ expectedDraftRev }: Parameters<MemberEditorActions["autosave"]>[0]) =>
+          savedResult(expectedDraftRev + 1),
+      );
+
+      for (const activated of ["a", "b"] as const) {
+        // Fresh hook slots and fresh effects for each pass, like a remount.
+        hookRuntime.reset();
+        const actions = createActions({ autosave });
+        const options = createOptions(actions, {
+          initialDocument: docWithEntries([rowOf("a", "b"), calloutBlock("c")]),
+        });
+
+        let editor = renderEditor(options);
+        editor.selectBlock(activated);
+        editor = renderEditor(options);
+
+        editor.splitRow(activated);
+        editor = renderEditor(options);
+
+        expect(editor.document.blocks.map((entry) => entry.type)).toEqual([
+          "calloutQuote",
+          "calloutQuote",
+          "calloutQuote",
+        ]);
+        expect(editor.document.blocks.map(entryLeafId)).toEqual(["a", "b", "c"]);
+        expect(editor.selectedBlockId).toBe(activated);
+        expect(editor.announcement).toMatch(/split/i);
+
+        await vi.advanceTimersByTimeAsync(800);
+        expect(autosave).toHaveBeenCalledOnce();
+        const savedDocument = autosave.mock.calls[0][0].document;
+        expect(savedDocument.blocks.map(entryLeafId)).toEqual(["a", "b", "c"]);
+        autosave.mockClear();
+      }
+    });
+
+    it("selects the corresponding fresh child after duplicating a row", () => {
+      const actions = createActions();
+      const options = createOptions(actions, {
+        initialDocument: docWithEntries([rowOf("a", "b")]),
+        idGenerator: (() => {
+          let n = 0;
+          return () => `fresh-${++n}`;
+        })(),
+      });
+
+      let editor = renderEditor(options);
+      editor.selectBlock("b");
+      editor = renderEditor(options);
+      const result = editor.duplicateBlock("b");
+
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok" || !result.duplicatedId) return;
+      const [original, copy] = result.document.blocks;
+      if (original.type !== "row" || copy.type !== "row") {
+        throw new Error("expected rows");
+      }
+      expect(result.duplicatedId).toBe(copy.blocks[1].id);
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe(result.duplicatedId);
+      expect(editor.announcement).toMatch(/duplicated/i);
+    });
+
+    it("selects the promoted survivor after deleting a row child, and the restored child after undo", () => {
+      const actions = createActions();
+      const options = createOptions(actions, {
+        initialDocument: docWithEntries([calloutBlock("z"), rowOf("a", "b")]),
+      });
+
+      let editor = renderEditor(options);
+      editor.selectBlock("a");
+      editor = renderEditor(options);
+      editor.deleteBlock("a");
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe("b");
+      expect(editor.document.blocks.map(entryLeafId)).toEqual(["z", "b"]);
+      expect(editor.announcement).toMatch(/deleted/i);
+
+      editor.undoDelete();
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe("a");
+      expect(editor.document.blocks.map(entryLeafId)).toEqual(["z", "a", "b"]);
+    });
+
+    it("selects the row's first child after deleting a standalone block above a row", () => {
+      const actions = createActions();
+      const options = createOptions(actions, {
+        initialDocument: docWithEntries([calloutBlock("z"), rowOf("a", "b")]),
+      });
+
+      let editor = renderEditor(options);
+      editor.selectBlock("z");
+      editor = renderEditor(options);
+      editor.deleteBlock("z");
+      editor = renderEditor(options);
+      expect(editor.selectedBlockId).toBe("a");
+    });
+
+    it("moves a row as one entry from either child", () => {
+      const actions = createActions();
+      const options = createOptions(actions, {
+        initialDocument: docWithEntries([calloutBlock("z"), rowOf("a", "b")]),
+      });
+
+      let editor = renderEditor(options);
+      editor.selectBlock("b");
+      editor = renderEditor(options);
+      editor.moveBlock("b", "up");
+      editor = renderEditor(options);
+
+      expect(editor.document.blocks.map(entryLeafId)).toEqual(["a", "z"]);
+      expect(editor.selectedBlockId).toBe("b");
+      expect(editor.announcement).toBe(
+        "Moved Two-block row to position 1 of 2.",
+      );
+    });
   });
 });

@@ -6,8 +6,10 @@ import type {
   GalleryBlock,
   ImageBlock,
   MemberBlock,
+  MemberBlockRow,
   MemberImageRef,
   MemberPageDocumentV2,
+  MemberPageEntry,
   MemberPageFrameV2,
   MemberProjectRef,
   ProjectListBlock,
@@ -15,6 +17,7 @@ import type {
   SocialPlatformId,
 } from "@/lib/members/v2/document";
 import {
+  MEMBER_BLOCK_ROW_RATIOS,
   MEMBER_PROJECT_STATUSES,
   MEMBER_SOCIAL_PLATFORM_IDS,
 } from "@/lib/members/v2/document";
@@ -900,24 +903,79 @@ function parseBlock(
   return null;
 }
 
-function parseBlocks(
+/**
+ * Parses a row entry at the document boundary. Row children go through the
+ * leaf-only `parseBlock`, never recursively through entry parsing, so a
+ * nested row fails with "Unknown member block type." at its own child path.
+ */
+function parseRow(
+  entry: Record<string, unknown>,
+  path: (string | number)[],
+  state: ParseState,
+): MemberBlockRow | null {
+  rejectUnknownKeys(entry, ["type", "ratio", "blocks"], path, state);
+  const ratio = parseEnum(
+    entry.ratio,
+    MEMBER_BLOCK_ROW_RATIOS,
+    [...path, "ratio"],
+    state,
+    "row ratio",
+  );
+  if (!Array.isArray(entry.blocks)) {
+    addError(state, [...path, "blocks"], "Row blocks must be an array of exactly two leaf blocks.");
+    return null;
+  }
+  if (entry.blocks.length !== 2) {
+    addError(state, [...path, "blocks"], "A row must contain exactly two leaf blocks.");
+  }
+  // Explicit indices: map/every skip holes, so a sparse array would
+  // otherwise yield an undefined tuple slot.
+  const left = parseBlock(entry.blocks[0], [...path, "blocks", 0], state);
+  const right = parseBlock(entry.blocks[1], [...path, "blocks", 1], state);
+  return ratio.ok && left && right && entry.blocks.length === 2
+    ? { type: "row", ratio: ratio.value, blocks: [left, right] }
+    : null;
+}
+
+function parseEntry(
   value: unknown,
   path: (string | number)[],
   state: ParseState,
-): MemberBlock[] | null {
+): MemberPageEntry | null {
+  const entry = requirePlainObject(value, path, state);
+  if (!entry) return null;
+  if (entry.type === "row") return parseRow(entry, path, state);
+  return parseBlock(entry, path, state);
+}
+
+function parseEntries(
+  value: unknown,
+  path: (string | number)[],
+  state: ParseState,
+): MemberPageEntry[] | null {
   if (!Array.isArray(value)) {
     addError(state, path, "Blocks must be an array.");
     return null;
   }
-  if (value.length > MAX_BLOCKS) {
-    addError(state, path, `A member page may contain at most ${MAX_BLOCKS} blocks.`);
-  }
-  const blocks = value.map((block, index) =>
-    parseBlock(block, [...path, index], state)
+  const entries = value.map((entry, index) =>
+    parseEntry(entry, [...path, index], state)
   );
-  return blocks.every((block): block is MemberBlock => block !== null)
-    ? blocks
+  const parsed = entries.every(
+    (entry): entry is MemberPageEntry => entry !== null,
+  )
+    ? entries
     : null;
+  if (!parsed) return null;
+
+  const leafCount = parsed.reduce(
+    (total, entry) => total + (entry.type === "row" ? entry.blocks.length : 1),
+    0,
+  );
+  if (leafCount > MAX_BLOCKS) {
+    addError(state, path, `A member page may contain at most ${MAX_BLOCKS} blocks.`);
+    return null;
+  }
+  return parsed;
 }
 
 function serializedDocumentSize(value: unknown): Parsed<number> {
@@ -967,7 +1025,7 @@ export function parseMemberPageDocumentV2(
     addError(state, ["schemaVersion"], "Schema version must be exactly 2.");
   }
   const frame = parseFrame(document.frame, ["frame"], state);
-  const blocks = parseBlocks(document.blocks, ["blocks"], state);
+  const blocks = parseEntries(document.blocks, ["blocks"], state);
 
   if (state.featuredProjectBlocks > MAX_FEATURED_PROJECT_BLOCKS) {
     addError(

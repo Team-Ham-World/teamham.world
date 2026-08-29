@@ -1,4 +1,7 @@
-import type { MemberBlock } from "@/lib/members/v2/document";
+import type {
+  MemberBlock,
+  MemberBlockRow,
+} from "@/lib/members/v2/document";
 
 /**
  * Opaque stable ID source.
@@ -57,6 +60,20 @@ export function withNewBlockIds(
     case "calloutQuote":
       return { ...block, id: nextId() };
   }
+}
+
+export function withNewRowIds(
+  row: MemberBlockRow,
+  nextId: MemberEditorIdGenerator,
+): MemberBlockRow {
+  return {
+    type: "row",
+    ratio: row.ratio,
+    blocks: [
+      withNewBlockIds(row.blocks[0], nextId),
+      withNewBlockIds(row.blocks[1], nextId),
+    ],
+  };
 }
 
 function structuredCloneDoc<T>(value: T): T {

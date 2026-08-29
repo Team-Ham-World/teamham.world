@@ -1,14 +1,16 @@
-import type {
-  RichTextBlockNode,
-  RichTextBlockquote,
-  RichTextBulletList,
-  RichTextDoc,
-  RichTextHeading,
-  RichTextListItem,
-  RichTextMark,
-  RichTextOrderedList,
-  RichTextParagraph,
-  RichTextText,
+import {
+  RICH_TEXT_ALIGNMENTS,
+  type RichTextBlockNode,
+  type RichTextBlockquote,
+  type RichTextBulletList,
+  type RichTextDoc,
+  type RichTextHeading,
+  type RichTextListItem,
+  type RichTextMark,
+  type RichTextOrderedList,
+  type RichTextParagraph,
+  type RichTextStoredAlignment,
+  type RichTextText,
 } from "@/lib/members/v2/document";
 import {
   MAX_URL_CHARS,
@@ -40,6 +42,31 @@ const MARK_ORDER: Record<RichTextMark["type"], number> = {
   italic: 1,
   link: 2,
 };
+
+const RICH_TEXT_ALIGNMENT_VALUES: ReadonlySet<string> = new Set([
+  ...RICH_TEXT_ALIGNMENTS,
+]);
+
+/**
+ * The one alignment policy: left|center|right in, center|right stored, left
+ * omitted as the default. Everything else is a validation error at the
+ * attribute's own path.
+ */
+function parseTextAlignAttr(
+  value: unknown,
+  path: (string | number)[],
+  state: ParseState,
+): RichTextStoredAlignment | null {
+  if (value === undefined || value === null || typeof value !== "string") {
+    addError(state, path, "Text alignment must be left, center, or right.");
+    return null;
+  }
+  if (!RICH_TEXT_ALIGNMENT_VALUES.has(value)) {
+    addError(state, path, "Text alignment must be left, center, or right.");
+    return null;
+  }
+  return value === "left" ? null : (value as RichTextStoredAlignment);
+}
 
 function addError(
   state: ParseState,
@@ -362,25 +389,18 @@ function parseBlockNode(
   }
 
   if (node.type === "paragraph") {
-    rejectUnknownKeys(node, ["type", "content"], path, state);
-    const content = parseTextContent(
-      node.content,
-      [...path, "content"],
-      depth + 1,
-      state,
-    );
-    return content ? { type: "paragraph", content } satisfies RichTextParagraph : null;
-  }
-
-  if (node.type === "heading") {
     rejectUnknownKeys(node, ["type", "attrs", "content"], path, state);
-    const attrsPath = [...path, "attrs"];
-    const attrs = requirePlainObject(node.attrs, attrsPath, state);
-    if (!attrs) return null;
-    rejectUnknownKeys(attrs, ["level"], attrsPath, state);
-    if (attrs.level !== 2 && attrs.level !== 3) {
-      addError(state, [...attrsPath, "level"], "Heading level must be 2 or 3.");
-      return null;
+    let textAlign: RichTextStoredAlignment | null = null;
+    if (Object.hasOwn(node, "attrs")) {
+      const attrsPath = [...path, "attrs"];
+      const attrs = requirePlainObject(node.attrs, attrsPath, state);
+      if (!attrs) return null;
+      rejectUnknownKeys(attrs, ["textAlign"], attrsPath, state);
+      textAlign = parseTextAlignAttr(
+        attrs.textAlign,
+        [...attrsPath, "textAlign"],
+        state,
+      );
     }
     const content = parseTextContent(
       node.content,
@@ -388,9 +408,40 @@ function parseBlockNode(
       depth + 1,
       state,
     );
-    return content
-      ? { type: "heading", attrs: { level: attrs.level }, content } satisfies RichTextHeading
+    if (!content) return null;
+    return textAlign
+      ? { type: "paragraph", attrs: { textAlign }, content } satisfies RichTextParagraph
+      : { type: "paragraph", content } satisfies RichTextParagraph;
+  }
+
+  if (node.type === "heading") {
+    rejectUnknownKeys(node, ["type", "attrs", "content"], path, state);
+    const attrsPath = [...path, "attrs"];
+    const attrs = requirePlainObject(node.attrs, attrsPath, state);
+    if (!attrs) return null;
+    rejectUnknownKeys(attrs, ["level", "textAlign"], attrsPath, state);
+    if (attrs.level !== 2 && attrs.level !== 3) {
+      addError(state, [...attrsPath, "level"], "Heading level must be 2 or 3.");
+      return null;
+    }
+    const textAlign = Object.hasOwn(attrs, "textAlign")
+      ? parseTextAlignAttr(attrs.textAlign, [...attrsPath, "textAlign"], state)
       : null;
+    const content = parseTextContent(
+      node.content,
+      [...path, "content"],
+      depth + 1,
+      state,
+    );
+    if (!content) return null;
+    return {
+      type: "heading",
+      attrs: {
+        level: attrs.level,
+        ...(textAlign ? { textAlign } : {}),
+      },
+      content,
+    } satisfies RichTextHeading;
   }
 
   if (node.type === "bulletList" || node.type === "orderedList") {

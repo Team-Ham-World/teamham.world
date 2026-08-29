@@ -5,8 +5,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { MemberPageV2View } from "@/components/member-page-v2/MemberPageV2View";
+import {
+  MEMBER_PAGE_PUBLIC_IMAGE_SIZES,
+  renderMemberPageV2LeafBlock,
+} from "@/components/member-page-v2/blocks/MemberPageV2LeafBlock";
+import { memberPageV2LeafRenderable } from "@/components/member-page-v2/page-composition";
 import { PROJECTS } from "@/data/projects";
 import type {
+  MemberBlock,
+  MemberBlockRow,
+  MemberBlockRowRatio,
   MemberPageDocumentV2,
   RichTextDoc,
 } from "@/lib/members/v2/document";
@@ -375,6 +383,75 @@ describe("MemberPageV2View rich-text block", () => {
     expect(html).toContain("&lt;/script&gt;");
     expect(html).not.toContain("<script>alert");
   });
+
+  it("aligns stored paragraphs and headings with fixed classes and keeps unaligned markup", () => {
+    const alignedDoc: RichTextDoc = {
+      type: "doc",
+      content: [
+        {
+          type: "paragraph",
+          attrs: { textAlign: "center" },
+          content: [{ type: "text", text: "Centered paragraph" }],
+        },
+        {
+          type: "heading",
+          attrs: { level: 2, textAlign: "right" },
+          content: [{ type: "text", text: "Right heading" }],
+        },
+        {
+          type: "bulletList",
+          content: [
+            {
+              type: "listItem",
+              content: [
+                {
+                  type: "paragraph",
+                  attrs: { textAlign: "right" },
+                  content: [{ type: "text", text: "Nested aligned" }],
+                },
+              ],
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Default paragraph" }],
+        },
+      ],
+    };
+
+    const doc: MemberPageDocumentV2 = {
+      ...MINIMAL_DOC,
+      blocks: [
+        { id: "rich-align", type: "richText", content: alignedDoc },
+      ],
+    };
+
+    const html = renderToStaticMarkup(
+      <MemberPageV2View
+        document={doc}
+        theme={PAPER_THEME}
+        assetMetadata={ASSET_METADATA}
+      />
+    );
+
+    expect(html).toContain(
+      '<p class="mt-4 first:mt-0 leading-relaxed text-center">',
+    );
+    expect(html).toContain("Centered paragraph");
+    expect(html).toContain(
+      '<h2 class="font-display text-2xl leading-tight mt-12 first:mt-0 sm:text-3xl text-right">',
+    );
+    expect(html).toContain("Right heading");
+    expect(html).toContain(
+      '<p class="mt-4 first:mt-0 leading-relaxed text-right">',
+    );
+    expect(html).toContain("Nested aligned");
+    expect(html).toContain(
+      '<p class="mt-4 first:mt-0 leading-relaxed"><span>Default paragraph</span></p>',
+    );
+    expect(html).not.toContain("text-align:");
+  });
 });
 
 describe("MemberPageV2View project blocks", () => {
@@ -497,9 +574,13 @@ describe("MemberPageV2View project blocks", () => {
       />,
     );
 
-    expect(html).toContain('data-member-layout="blocks"');
-    expect(html).not.toContain("data-profile-showcase");
+    expect(html).toContain('data-member-layout="showcase"');
+    expect(html).toContain('data-profile-showcase="true"');
     expect(html).toContain("Featured project");
+    expect(html).not.toContain('>Showcase<');
+    expect(html.indexOf("Moved above the project.")).toBeLessThan(
+      html.indexOf("Demoted Showcase"),
+    );
   });
 
   it("puts the showcase beside the profile in every theme", () => {
@@ -1040,7 +1121,8 @@ describe("MemberPageV2View theme application", () => {
         expect(html).toContain('data-member-theme-surface="true"');
         expect(html).toContain(`data-theme-id="${theme.themeId}"`);
         expect(html).toContain(`data-accent-id="${theme.accentId}"`);
-        expect(html).toContain('data-member-layout="blocks"');
+        expect(html).toContain('data-member-layout="showcase"');
+        expect(html).toContain('data-header-slot="true"');
         expect(html).toContain("Featured project");
         expect(html).toContain("Projects");
         expect(html).toContain("Newsletter");
@@ -1150,3 +1232,501 @@ function externalProjectForRenderer(name: string) {
     url: "https://example.com/project",
   };
 }
+
+function rowBlock(
+  id: string,
+  text: string,
+): Extract<MemberBlock, { type: "calloutQuote" }> {
+  return { id, type: "calloutQuote", variant: "note", text, attribution: null };
+}
+
+function imageBlockFixture(
+  id: string,
+  assetId: string,
+  variant: "framed" | "wide" = "framed",
+): Extract<MemberBlock, { type: "image" }> {
+  return {
+    id,
+    type: "image",
+    variant,
+    image: { assetId, alt: `Alt for ${id}`, decorative: false },
+    caption: null,
+  };
+}
+
+function row(
+  left: MemberBlock,
+  right: MemberBlock,
+  ratio: MemberBlockRowRatio = "1:1",
+): MemberBlockRow {
+  return { type: "row", ratio, blocks: [left, right] };
+}
+
+describe("MemberPageV2View rows", () => {
+  it("renders the exact desktop grid for each ratio and stacks below lg", () => {
+    const expectations: ReadonlyArray<
+      [MemberBlockRowRatio, string]
+    > = [
+      [
+        "1:1",
+        "grid grid-cols-1 gap-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]",
+      ],
+      [
+        "1:2",
+        "grid grid-cols-1 gap-14 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]",
+      ],
+      [
+        "2:1",
+        "grid grid-cols-1 gap-14 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]",
+      ],
+    ];
+
+    for (const [ratio, gridClass] of expectations) {
+      const doc: MemberPageDocumentV2 = {
+        ...MINIMAL_DOC,
+        blocks: [row(rowBlock("r-left", "Left side."), rowBlock("r-right", "Right side."), ratio)],
+      };
+      const html = renderToStaticMarkup(
+        <MemberPageV2View
+          document={doc}
+          theme={PAPER_THEME}
+          assetMetadata={ASSET_METADATA}
+        />,
+      );
+
+      expect(html).toContain(gridClass);
+      expect(html).toContain(`data-member-row-ratio="${ratio}"`);
+      // Grid children cannot push a track wider than the page.
+      expect(html).toContain('class="min-w-0"');
+    }
+  });
+
+  it("keeps stored left-then-right order in the DOM", () => {
+    const doc: MemberPageDocumentV2 = {
+      ...MINIMAL_DOC,
+      blocks: [row(rowBlock("r-left", "Left side."), rowBlock("r-right", "Right side."))],
+    };
+    const html = renderToStaticMarkup(
+      <MemberPageV2View
+        document={doc}
+        theme={PAPER_THEME}
+        assetMetadata={ASSET_METADATA}
+      />,
+    );
+
+    expect(html.indexOf("Left side.")).toBeLessThan(
+      html.indexOf("Right side."),
+    );
+  });
+
+  it("renders every block type and variant inside a row", () => {
+    const featuredInRow = (variant: "card" | "artwork-first"): MemberBlock => ({
+      id: `row-featured-${variant}`,
+      type: "featuredProject",
+      variant,
+      project: externalProjectForRenderer(`Row ${variant}`),
+    });
+    const cases: ReadonlyArray<readonly [MemberBlock, string]> = [
+      [
+        {
+          id: "row-rich",
+          type: "richText",
+          content: {
+            type: "doc",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: "Row prose." }],
+              },
+            ],
+          },
+        },
+        "Row prose.",
+      ],
+      [featuredInRow("card"), "Row card"],
+      [featuredInRow("artwork-first"), "Row artwork-first"],
+      [
+        {
+          id: "row-projects",
+          type: "projectList",
+          variant: "stacked",
+          projects: [
+            { id: "rp-1", project: externalProjectForRenderer("Row stacked") },
+          ],
+        },
+        "Row stacked",
+      ],
+      [
+        {
+          id: "row-projects-compact",
+          type: "projectList",
+          variant: "compact",
+          projects: [
+            { id: "rp-2", project: externalProjectForRenderer("Row compact") },
+          ],
+        },
+        "Row compact",
+      ],
+      [
+        {
+          id: "row-links-list",
+          type: "additionalLinks",
+          variant: "list",
+          links: [
+            {
+              id: "rl-1",
+              label: "Row docs",
+              url: "https://example.com/row-docs",
+              description: null,
+            },
+          ],
+        },
+        "Row docs",
+      ],
+      [
+        {
+          id: "row-links-buttons",
+          type: "additionalLinks",
+          variant: "buttons",
+          links: [
+            {
+              id: "rl-2",
+              label: "Row play",
+              url: "https://example.com/row-play",
+              description: null,
+            },
+          ],
+        },
+        "Row play",
+      ],
+      [
+        imageBlockFixture("row-image-framed", "asset-1", "framed"),
+        "/member-assets/asset-1",
+      ],
+      [
+        imageBlockFixture("row-image-wide", "asset-2", "wide"),
+        'data-image-variant="wide"',
+      ],
+      [
+        {
+          id: "row-gallery",
+          type: "gallery",
+          variant: "grid",
+          items: [
+            {
+              id: "rg-1",
+              image: { assetId: "asset-1", alt: "Row sketch", decorative: false },
+              caption: "Row caption.",
+            },
+          ],
+        },
+        "Row caption.",
+      ],
+      [
+        {
+          id: "row-gallery-strip",
+          type: "gallery",
+          variant: "strip",
+          items: [
+            {
+              id: "rg-2",
+              image: { assetId: "asset-2", alt: "Row strip", decorative: false },
+              caption: null,
+            },
+          ],
+        },
+        "Row strip",
+      ],
+      [rowBlock("row-note", "Row note."), "Row note."],
+      [
+        {
+          id: "row-quote",
+          type: "calloutQuote",
+          variant: "quote",
+          text: "Row quote.",
+          attribution: null,
+        },
+        "Row quote.",
+      ],
+    ];
+
+    for (const [block, landmark] of cases) {
+      const doc: MemberPageDocumentV2 = {
+        ...MINIMAL_DOC,
+        blocks: [row(block, rowBlock("row-mate", "The other side."))],
+      };
+      const html = renderToStaticMarkup(
+        <MemberPageV2View
+          document={doc}
+          theme={PAPER_THEME}
+          assetMetadata={ASSET_METADATA}
+        />,
+      );
+      expect(html, block.type).toContain(landmark);
+    }
+  });
+
+  it("never gives a leading row the showcase slot", () => {
+    const doc: MemberPageDocumentV2 = {
+      ...MINIMAL_DOC,
+      blocks: [
+        row(
+          {
+            id: "leading-featured",
+            type: "featuredProject",
+            variant: "card",
+            project: externalProjectForRenderer("Inside row"),
+          },
+          rowBlock("row-mate", "Beside the project."),
+        ),
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <MemberPageV2View
+        document={doc}
+        theme={PAPER_THEME}
+        assetMetadata={ASSET_METADATA}
+      />,
+    );
+
+    expect(html).toContain('data-member-layout="blocks"');
+    expect(html).not.toContain("data-profile-showcase");
+    expect(html).toContain('data-featured-project-layout="standard"');
+    expect(html).not.toContain(">Showcase<");
+  });
+
+  it("promotes the surviving child to full width when one child cannot render", () => {
+    const doc: MemberPageDocumentV2 = {
+      ...MINIMAL_DOC,
+      blocks: [
+        row(
+          imageBlockFixture("dead-image", "missing-asset"),
+          rowBlock("survivor", "The surviving note."),
+        ),
+        rowBlock("after", "The next entry."),
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <MemberPageV2View
+        document={doc}
+        theme={PAPER_THEME}
+        assetMetadata={ASSET_METADATA}
+      />,
+    );
+
+    expect(html).not.toContain("data-member-row-ratio");
+    expect(html).not.toContain("/member-assets/missing-asset");
+    expect(html).toContain("The surviving note.");
+    expect(html).toContain("The next entry.");
+    expect(html.indexOf("The surviving note.")).toBeLessThan(
+      html.indexOf("The next entry."),
+    );
+  });
+
+  it("omits a row whose two children both fail to render", () => {
+    const doc: MemberPageDocumentV2 = {
+      ...MINIMAL_DOC,
+      blocks: [
+        row(
+          imageBlockFixture("dead-left", "missing-a"),
+          imageBlockFixture("dead-right", "missing-b"),
+        ),
+        rowBlock("after", "The next entry."),
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <MemberPageV2View
+        document={doc}
+        theme={PAPER_THEME}
+        assetMetadata={ASSET_METADATA}
+      />,
+    );
+
+    expect(html).not.toContain("data-member-row-ratio");
+    expect(html).not.toContain("/member-assets/missing-a");
+    expect(html).not.toContain("/member-assets/missing-b");
+    expect(html).toContain("The next entry.");
+  });
+
+  it("sizes row images by their assigned column at lg, full width below it", () => {
+    const sizesFor = (ratio: MemberBlockRowRatio, side: 0 | 1): string => {
+      const left = imageBlockFixture(`img-${ratio}-0`, "asset-1");
+      const right = imageBlockFixture(`img-${ratio}-1`, "asset-1");
+      const doc: MemberPageDocumentV2 = {
+        ...MINIMAL_DOC,
+        blocks: [row(left, right, ratio)],
+      };
+      const html = renderToStaticMarkup(
+        <MemberPageV2View
+          document={doc}
+          theme={PAPER_THEME}
+          assetMetadata={ASSET_METADATA}
+        />,
+      );
+      const matches = [...html.matchAll(/sizes="([^"]+)"/gu)].map(
+        (match) => match[1],
+      );
+      expect(matches).toHaveLength(2);
+      return matches[side];
+    };
+
+    expect(sizesFor("1:1", 0)).toBe(
+      "(min-width: 1024px) 452px, calc(100vw - 2.5rem)",
+    );
+    expect(sizesFor("1:1", 1)).toBe(
+      "(min-width: 1024px) 452px, calc(100vw - 2.5rem)",
+    );
+    expect(sizesFor("1:2", 0)).toBe(
+      "(min-width: 1024px) 301px, calc(100vw - 2.5rem)",
+    );
+    expect(sizesFor("1:2", 1)).toBe(
+      "(min-width: 1024px) 603px, calc(100vw - 2.5rem)",
+    );
+    expect(sizesFor("2:1", 0)).toBe(
+      "(min-width: 1024px) 603px, calc(100vw - 2.5rem)",
+    );
+    expect(sizesFor("2:1", 1)).toBe(
+      "(min-width: 1024px) 301px, calc(100vw - 2.5rem)",
+    );
+  });
+
+  it("fills a wide image's assigned column without changing the variant", () => {
+    const doc: MemberPageDocumentV2 = {
+      ...MINIMAL_DOC,
+      blocks: [
+        row(
+          imageBlockFixture("wide-left", "asset-2", "wide"),
+          rowBlock("mate", "Text beside the wide image."),
+        ),
+      ],
+    };
+    const html = renderToStaticMarkup(
+      <MemberPageV2View
+        document={doc}
+        theme={PAPER_THEME}
+        assetMetadata={ASSET_METADATA}
+      />,
+    );
+
+    expect(html).toContain('data-image-variant="wide"');
+    expect(html).toContain("card-tilt w-full max-w-full");
+    expect(html).toContain("(min-width: 1024px) 452px");
+  });
+});
+
+describe("row renderability boundary", () => {
+  const cases: ReadonlyArray<readonly [string, MemberBlock, boolean]> = [
+    [
+      "image with metadata",
+      imageBlockFixture("ok-image", "asset-1"),
+      true,
+    ],
+    [
+      "image without metadata",
+      imageBlockFixture("dead-image", "missing-asset"),
+      false,
+    ],
+    [
+      "featured project that resolves",
+      {
+        id: "ok-featured",
+        type: "featuredProject",
+        variant: "card",
+        project: externalProjectForRenderer("Resolvable"),
+      },
+      true,
+    ],
+    [
+      "featured project with an unknown HAM slug",
+      {
+        id: "dead-featured",
+        type: "featuredProject",
+        variant: "card",
+        project: { kind: "ham", projectSlug: "not-a-real-project" },
+      },
+      false,
+    ],
+    [
+      "project list with one resolvable project",
+      {
+        id: "ok-list",
+        type: "projectList",
+        variant: "stacked",
+        projects: [
+          { id: "p-1", project: externalProjectForRenderer("Fine") },
+        ],
+      },
+      true,
+    ],
+    [
+      "project list with only unknown HAM projects",
+      {
+        id: "dead-list",
+        type: "projectList",
+        variant: "stacked",
+        projects: [
+          { id: "p-2", project: { kind: "ham", projectSlug: "not-a-real-project" } },
+        ],
+      },
+      false,
+    ],
+    [
+      "gallery with renderable items",
+      {
+        id: "ok-gallery",
+        type: "gallery",
+        variant: "grid",
+        items: [
+          {
+            id: "g-1",
+            image: { assetId: "asset-1", alt: "Fine", decorative: false },
+            caption: null,
+          },
+        ],
+      },
+      true,
+    ],
+    [
+      "gallery whose items all lost their assets",
+      {
+        id: "dead-gallery",
+        type: "gallery",
+        variant: "grid",
+        items: [
+          {
+            id: "g-2",
+            image: { assetId: "missing-asset", alt: "Gone", decorative: false },
+            caption: null,
+          },
+        ],
+      },
+      false,
+    ],
+    [
+      "rich text always renders",
+      {
+        id: "ok-rich",
+        type: "richText",
+        content: {
+          type: "doc",
+          content: [{ type: "paragraph", content: [{ type: "text", text: "Hi" }] }],
+        },
+      },
+      true,
+    ],
+  ];
+
+  it("agrees with the leaf dispatcher's actual output for every degradable type", () => {
+    for (const [name, block, expected] of cases) {
+      const element = renderMemberPageV2LeafBlock(block, {
+        assetMetadata: ASSET_METADATA,
+        imageSizes: MEMBER_PAGE_PUBLIC_IMAGE_SIZES,
+      });
+      const html = element ? renderToStaticMarkup(element) : "";
+      expect(html.length > 0, name).toBe(expected);
+      expect(memberPageV2LeafRenderable(block, ASSET_METADATA), name).toBe(
+        expected,
+      );
+    }
+  });
+});
