@@ -31,6 +31,7 @@ export function extractMemberPageAssetIds(doc: MemberPageDocumentV2): string[] {
       case "richText":
       case "additionalLinks":
       case "calloutQuote":
+      case "embed":
         break;
     }
   }

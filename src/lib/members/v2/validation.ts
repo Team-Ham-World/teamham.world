@@ -2,6 +2,7 @@ import { PROJECTS } from "@/data/projects";
 import type {
   AdditionalLinksBlock,
   CalloutQuoteBlock,
+  EmbedBlock,
   FeaturedProjectBlock,
   GalleryBlock,
   ImageBlock,
@@ -28,6 +29,7 @@ import {
   MAX_COLLECTION_ITEMS,
   MAX_DISPLAY_NAME_CHARS,
   MAX_DOCUMENT_BYTES,
+  MAX_EMBED_TITLE_CHARS,
   MAX_FEATURED_PROJECT_BLOCKS,
   MAX_IMAGE_ALT_CHARS,
   MAX_LINK_DESCRIPTION_CHARS,
@@ -896,6 +898,52 @@ function parseBlock(
           text: text.value,
           attribution: attribution.value,
         } satisfies CalloutQuoteBlock
+      : null;
+  }
+
+  if (block.type === "embed") {
+    rejectUnknownKeys(
+      block,
+      ["id", "type", "variant", "url", "title", "showFrame"],
+      path,
+      state,
+    );
+    const variant = parseEnum(
+      block.variant,
+      ["compact", "standard", "widescreen"] as const,
+      [...path, "variant"],
+      state,
+      "embed variant",
+    );
+    const url = parseNullableHttpsUrl(block.url, [...path, "url"], state);
+    if (url.ok && url.value === null) {
+      addError(state, [...path, "url"], "Embed URL cannot be empty.");
+    }
+    const title = parseRequiredText(
+      block.title,
+      MAX_EMBED_TITLE_CHARS,
+      [...path, "title"],
+      state,
+    );
+    // Embed blocks created before the frame control predate this key. Treat
+    // its absence as the original framed presentation and return the complete
+    // current shape, so stored drafts need no database rewrite.
+    const showFrame = Object.hasOwn(block, "showFrame")
+      ? block.showFrame
+      : true;
+    if (typeof showFrame !== "boolean") {
+      addError(state, [...path, "showFrame"], "Show frame must be a boolean.");
+    }
+    return id.ok && variant.ok && url.ok && url.value && title.ok &&
+        typeof showFrame === "boolean"
+      ? {
+          id: id.value,
+          type: "embed",
+          variant: variant.value,
+          url: url.value,
+          title: title.value,
+          showFrame,
+        } satisfies EmbedBlock
       : null;
   }
 

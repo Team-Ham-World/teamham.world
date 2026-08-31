@@ -5,6 +5,7 @@ import { useState } from "react";
 import type {
   AdditionalLinksBlock,
   CalloutQuoteBlock,
+  EmbedBlock,
   FeaturedProjectBlock,
   GalleryBlock,
   ImageBlock,
@@ -23,6 +24,7 @@ import {
   buildHamProjectRef,
   editorBlockKind,
   isLikelyHttpsUrl,
+  parseEmbedInput,
   HAM_PROJECT_CHOICES,
 } from "./block-catalog";
 import type { EditorAsset } from "./asset-api";
@@ -120,6 +122,9 @@ export function BlockInspector({
             }}
           />
         ) : null}
+        {block.type === "embed" ? (
+          <EmbedFields block={block} onChange={onChange} />
+        ) : null}
       </InspectorSection>
 
       {rowRatio ? (
@@ -194,6 +199,93 @@ export function BlockInspector({
         </InspectorSection>
       ) : null}
     </div>
+  );
+}
+
+function EmbedFields({
+  block,
+  onChange,
+}: {
+  block: EmbedBlock;
+  onChange: (block: MemberBlock) => void;
+}) {
+  return (
+    <>
+      <TextAreaField
+        id={`block-${block.id}-url`}
+        label="Iframe code or embed address"
+        rows={5}
+        value={block.url}
+        maxLength={EDITOR_FIELD_LIMITS.embedInput}
+        hint="Paste new iframe code to replace this embed. Only its HTTPS address is saved."
+        error={
+          parseEmbedInput(block.url)
+            ? undefined
+            : "Paste an iframe with a full HTTPS src address, or the address itself."
+        }
+        onChange={(input) => {
+          const parsed = parseEmbedInput(input);
+          onChange({
+            ...block,
+            url: parsed?.url ?? input,
+            ...(parsed
+              ? {
+                  variant: parsed.variant,
+                  title: parsed.title
+                    ? parsed.title.slice(0, EDITOR_FIELD_LIMITS.embedTitle)
+                    : block.title,
+                }
+              : {}),
+          });
+        }}
+      />
+      <TextField
+        id={`block-${block.id}-title`}
+        label="Accessible title"
+        value={block.title}
+        maxLength={EDITOR_FIELD_LIMITS.embedTitle}
+        hint="Describe the player or post for people using assistive technology."
+        error={block.title.trim() === "" ? "Add a short title." : undefined}
+        onChange={(title) => onChange({ ...block, title })}
+      />
+      <SelectField
+        id={`block-${block.id}-variant`}
+        label="Layout"
+        value={block.variant}
+        options={[
+          { value: "compact", label: "Compact player" },
+          { value: "standard", label: "Standard player" },
+          { value: "widescreen", label: "Widescreen (16:9)" },
+        ]}
+        onChange={(variant) =>
+          onChange({ ...block, variant: variant as EmbedBlock["variant"] })
+        }
+      />
+      <div>
+        <label
+          htmlFor={`block-${block.id}-show-frame`}
+          className="flex min-h-11 items-center gap-3 border-2 border-ink bg-paper px-3 py-2 text-sm font-bold text-ink"
+        >
+          <input
+            id={`block-${block.id}-show-frame`}
+            type="checkbox"
+            checked={block.showFrame}
+            onChange={(event) =>
+              onChange({ ...block, showFrame: event.target.checked })
+            }
+            className="size-5 shrink-0"
+          />
+          Show HAM frame
+        </label>
+        <p className="mt-2 text-sm leading-relaxed text-muted">
+          Turn this off to show only the provider&apos;s embed.
+        </p>
+      </div>
+      <p className="text-sm leading-relaxed text-muted">
+        Embeds connect visitors to a third-party service. Use code from a
+        provider you trust.
+      </p>
+    </>
   );
 }
 

@@ -44,6 +44,9 @@ Member-uploaded asset sources are always same-origin `/member-assets/<assetId>`.
 - **Accessibility**: Decorative images use `alt=""`, informative images require non-empty alt text.
 - **Semantic HTML**: Rich-text JSON renders to React elements; never `dangerouslySetInnerHTML`.
 - **Safe links**: External links use `rel="noopener noreferrer"`.
+- **Contained embeds**: Pasted iframe HTML is reduced to a validated HTTPS URL,
+  title, and layout before storage. The renderer owns the iframe sandbox and
+  permissions; member-authored HTML and attributes are never rendered.
 
 ## Supported Blocks
 
@@ -56,6 +59,7 @@ Member-uploaded asset sources are always same-origin `/member-assets/<assetId>`.
 | `image` | `framed`, `wide` | Single image with optional caption. |
 | `gallery` | `grid`, `strip` | Two or more images with optional captions. |
 | `calloutQuote` | `note`, `quote` | Plain text callout; `quote` supports attribution. |
+| `embed` | `compact`, `standard`, `widescreen` | Sandboxed HTTPS iframe with a required accessible title and optional HAM frame. |
 
 ## Testing
 
@@ -65,6 +69,8 @@ Renderer tests verify:
 - Exactly one H1; H2/H3 rich-text semantics; React escaping; no dangerous HTML.
 - HAM catalog artwork, external art-pending/member artwork states, safe link rels, same-origin upload paths, dimensions, and alt/decorative semantics.
 - Missing asset metadata fails closed without remote/object-key leakage.
+- Embed parsing drops provider HTML/attributes and rejects non-HTTPS sources;
+  rendered iframes carry fixed sandbox, permissions, referrer policy, and lazy loading.
 - Source-level assertion: no imports from editor, TipTap, dnd-kit, upload, or `use client`.
 
 Run tests:

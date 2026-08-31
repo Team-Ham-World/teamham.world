@@ -389,6 +389,7 @@ describe("typed editor controls", () => {
     expect(html).toContain("Add Rich text");
     expect(html).toContain("Add Image");
     expect(html).toContain("Add Gallery");
+    expect(html).toContain("Add Embed");
   });
 
   it("shows the ready-only asset library and its quota", () => {

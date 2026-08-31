@@ -92,6 +92,7 @@ export function memberPageV2LeafRenderable(
     case "richText":
     case "additionalLinks":
     case "calloutQuote":
+    case "embed":
       return true;
     case "image":
       return assetMetadata.has(block.image.assetId);

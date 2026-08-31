@@ -150,6 +150,11 @@ export function controlIdForError(
       if (path[0] === "text") return `${base}-text`;
       if (path[0] === "attribution") return `${base}-attribution`;
       return `${base}-variant`;
+    case "embed":
+      if (path[0] === "url") return `${base}-url`;
+      if (path[0] === "title") return `${base}-title`;
+      if (path[0] === "showFrame") return `${base}-show-frame`;
+      return `${base}-variant`;
   }
 }
 

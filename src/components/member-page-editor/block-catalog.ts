@@ -2,6 +2,7 @@ import { PROJECTS } from "@/data/projects";
 import type {
   AdditionalLinksBlock,
   CalloutQuoteBlock,
+  EmbedBlock,
   FeaturedProjectBlock,
   MemberBlock,
   MemberImageRef,
@@ -17,6 +18,7 @@ import {
   MAX_CAPTION_CHARS,
   MAX_COLLECTION_ITEMS,
   MAX_IMAGE_ALT_CHARS,
+  MAX_EMBED_TITLE_CHARS,
   MAX_LINK_DESCRIPTION_CHARS,
   MAX_LINK_LABEL_CHARS,
   MAX_PROJECT_DESCRIPTION_CHARS,
@@ -96,6 +98,13 @@ export const EDITOR_BLOCK_KINDS: readonly EditorBlockKind[] = [
     availability: { kind: "available" },
     requiresContent: true,
   },
+  {
+    type: "embed",
+    label: "Embed",
+    description: "Spotify, video, audio, or another iframe-based embed.",
+    availability: { kind: "available" },
+    requiresContent: true,
+  },
 ];
 
 export function editorBlockKind(type: MemberBlock["type"]): EditorBlockKind {
@@ -118,6 +127,8 @@ export const EDITOR_FIELD_LIMITS = {
   callout: MAX_CALLOUT_CHARS,
   caption: MAX_CAPTION_CHARS,
   imageAlt: MAX_IMAGE_ALT_CHARS,
+  embedTitle: MAX_EMBED_TITLE_CHARS,
+  embedInput: 8_192,
   url: MAX_URL_CHARS,
   collectionItems: MAX_COLLECTION_ITEMS,
 } as const;
@@ -219,6 +230,94 @@ export function buildRichTextBlock(
     type: "richText",
     content,
   };
+}
+
+export function buildEmbedBlock(
+  input: Pick<EmbedBlock, "url" | "title" | "variant" | "showFrame">,
+  nextId: MemberEditorIdGenerator,
+): EmbedBlock {
+  return {
+    id: nextId(),
+    type: "embed",
+    variant: input.variant,
+    url: input.url.trim(),
+    title: input.title.trim(),
+    showFrame: input.showFrame,
+  };
+}
+
+export type ParsedEmbedInput = Pick<EmbedBlock, "url" | "variant"> & {
+  title: string | null;
+};
+
+/**
+ * Accepts either a provider's iframe snippet or its direct HTTPS embed URL.
+ *
+ * The document never stores raw HTML. Attribute parsing is intentionally
+ * narrow: only src, title, width, and height can influence the typed block;
+ * scripts, styles, event handlers, and provider-supplied permissions are
+ * discarded before the value reaches autosave.
+ */
+export function parseEmbedInput(value: string): ParsedEmbedInput | null {
+  const trimmed = value.trim();
+  if (isLikelyHttpsUrl(trimmed)) {
+    return { url: trimmed, title: null, variant: "standard" };
+  }
+
+  const openingTag = trimmed.match(/<iframe\b([^>]*)>/iu)?.[1];
+  if (!openingTag) return null;
+
+  const attributes = parseIframeAttributes(openingTag);
+  const url = decodeHtmlAttribute(attributes.src ?? "").trim();
+  if (!isLikelyHttpsUrl(url)) return null;
+
+  const title = decodeHtmlAttribute(attributes.title ?? "").trim();
+  const width = positiveDimension(attributes.width);
+  const height = positiveDimension(attributes.height);
+
+  return {
+    url,
+    title: title === "" ? null : title,
+    variant: embedVariantForDimensions(width, height),
+  };
+}
+
+function parseIframeAttributes(source: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const pattern =
+    /\b(src|title|width|height)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/giu;
+  for (const match of source.matchAll(pattern)) {
+    const name = match[1]?.toLowerCase();
+    const value = match[2] ?? match[3] ?? match[4];
+    if (name && value !== undefined && attributes[name] === undefined) {
+      attributes[name] = value;
+    }
+  }
+  return attributes;
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll(/&amp;/giu, "&")
+    .replaceAll(/&quot;/giu, '"')
+    .replaceAll(/&#39;|&apos;/giu, "'")
+    .replaceAll(/&lt;/giu, "<")
+    .replaceAll(/&gt;/giu, ">");
+}
+
+function positiveDimension(value: string | undefined): number | null {
+  if (!value || !/^\d+(?:\.\d+)?$/u.test(value)) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function embedVariantForDimensions(
+  width: number | null,
+  height: number | null,
+): EmbedBlock["variant"] {
+  if (width && height && width / height >= 1.45) return "widescreen";
+  if (height && height <= 200) return "compact";
+  return "standard";
 }
 
 export function buildHamProjectRef(projectSlug: string): MemberProjectRef {

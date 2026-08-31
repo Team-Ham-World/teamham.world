@@ -195,6 +195,15 @@ function QuoteIcon(props: IconProps) {
   );
 }
 
+function EmbedIcon(props: IconProps) {
+  return (
+    <Icon {...props}>
+      <rect x="3.5" y="5" width="17" height="14" />
+      <path d="m9 9-3 3 3 3M15 9l3 3-3 3" />
+    </Icon>
+  );
+}
+
 const BLOCK_ICONS: Record<
   MemberBlock["type"],
   (props: IconProps) => React.ReactElement
@@ -206,6 +215,7 @@ const BLOCK_ICONS: Record<
   image: ImageIcon,
   gallery: GalleryIcon,
   calloutQuote: QuoteIcon,
+  embed: EmbedIcon,
 };
 
 /** Decorative type glyph for a block, used beside its always-present label. */

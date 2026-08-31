@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import type {
   GalleryBlock,
+  EmbedBlock,
   ImageBlock,
   MemberBlock,
   MemberProjectRef,
@@ -22,10 +23,12 @@ import {
   buildAdditionalLinksBlock,
   buildCalloutQuoteBlock,
   buildFeaturedProjectBlock,
+  buildEmbedBlock,
   buildHamProjectRef,
   buildProjectListBlock,
   buildRichTextBlock,
   isLikelyHttpsUrl,
+  parseEmbedInput,
 } from "./block-catalog";
 import type { EditorAsset } from "./asset-api";
 import {
@@ -66,7 +69,8 @@ type DraftKind =
   | "calloutQuote"
   | "richText"
   | "image"
-  | "gallery";
+  | "gallery"
+  | "embed";
 
 type CreationDraft =
   | { kind: "featuredProject" | "projectList"; project: MemberProjectRef }
@@ -93,6 +97,13 @@ type CreationDraft =
       kind: "gallery";
       variant: GalleryBlock["variant"];
       items: GalleryItemDraft[];
+    }
+  | {
+      kind: "embed";
+      input: string;
+      title: string;
+      variant: EmbedBlock["variant"];
+      showFrame: boolean;
     };
 
 function newGalleryItem(nextId: MemberEditorIdGenerator): GalleryItemDraft {
@@ -128,6 +139,15 @@ function initialDraft(
       variant: "framed",
       image: emptyImageUseDraft(),
       caption: "",
+    };
+  }
+  if (kind === "embed") {
+    return {
+      kind,
+      input: "",
+      title: "",
+      variant: "standard",
+      showFrame: true,
     };
   }
   return {
@@ -170,6 +190,8 @@ function isDraftComplete(
         draft.items.length <= MAX_COLLECTION_ITEMS &&
         draft.items.every((item) => buildReadyImageRef(item, assets) !== null)
       );
+    case "embed":
+      return parseEmbedInput(draft.input) !== null && draft.title.trim() !== "";
   }
 }
 
@@ -211,6 +233,20 @@ function buildBlock(
       return buildImageBlockFromDraft(draft, assets, nextId);
     case "gallery":
       return buildGalleryBlockFromDraft(draft, assets, nextId);
+    case "embed": {
+      const parsed = parseEmbedInput(draft.input);
+      return parsed
+        ? buildEmbedBlock(
+            {
+              url: parsed.url,
+              title: draft.title,
+              variant: draft.variant,
+              showFrame: draft.showFrame,
+            },
+            nextId,
+          )
+        : null;
+    }
   }
 }
 
@@ -583,6 +619,70 @@ function DraftForm({
             </button>
           </>
         ) : null}
+
+        {draft.kind === "embed" ? (
+          <>
+            <TextAreaField
+              id="new-block-embed-input"
+              label="Iframe code or embed address"
+              rows={5}
+              value={draft.input}
+              maxLength={EDITOR_FIELD_LIMITS.embedInput}
+              hint="Paste the iframe code supplied by Spotify, YouTube, SoundCloud, or another provider. Only its HTTPS address is saved."
+              error={
+                draft.input !== "" && !parseEmbedInput(draft.input)
+                  ? "Paste an iframe with a full HTTPS src address, or the address itself."
+                  : undefined
+              }
+              onChange={(input) => {
+                const parsed = parseEmbedInput(input);
+                setDraft({
+                  ...draft,
+                  input,
+                  ...(parsed
+                    ? {
+                        variant: parsed.variant,
+                        title: parsed.title
+                          ? parsed.title.slice(0, EDITOR_FIELD_LIMITS.embedTitle)
+                          : draft.title,
+                      }
+                    : {}),
+                });
+              }}
+            />
+            <TextField
+              id="new-block-embed-title"
+              label="Accessible title"
+              value={draft.title}
+              maxLength={EDITOR_FIELD_LIMITS.embedTitle}
+              hint="Describe the player or post for people using assistive technology. Provider code often fills this in for you."
+              error={draft.title.trim() === "" ? "Add a short title." : undefined}
+              onChange={(title) => setDraft({ ...draft, title })}
+            />
+            <SelectField
+              id="new-block-embed-variant"
+              label="Layout"
+              value={draft.variant}
+              options={EMBED_VARIANT_OPTIONS}
+              hint="The editor chooses a starting layout from the iframe dimensions."
+              onChange={(variant) =>
+                setDraft({
+                  ...draft,
+                  variant: variant as EmbedBlock["variant"],
+                })
+              }
+            />
+            <EmbedFrameField
+              id="new-block-embed-show-frame"
+              checked={draft.showFrame}
+              onChange={(showFrame) => setDraft({ ...draft, showFrame })}
+            />
+            <p className={EDITOR_HINT}>
+              Embeds connect visitors to a third-party service. Use code from a
+              provider you trust.
+            </p>
+          </>
+        ) : null}
       </div>
 
       <div className="mt-6 flex flex-wrap gap-3">
@@ -603,6 +703,43 @@ function DraftForm({
           Fill in the required details above to add this block.
         </p>
       ) : null}
+    </div>
+  );
+}
+
+const EMBED_VARIANT_OPTIONS = [
+  { value: "compact", label: "Compact player" },
+  { value: "standard", label: "Standard player" },
+  { value: "widescreen", label: "Widescreen (16:9)" },
+] as const;
+
+function EmbedFrameField({
+  id,
+  checked,
+  onChange,
+}: {
+  id: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div>
+      <label
+        htmlFor={id}
+        className="flex min-h-11 items-center gap-3 border-2 border-ink bg-paper px-3 py-2 text-sm font-bold text-ink"
+      >
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+          className="size-5 shrink-0"
+        />
+        Show HAM frame
+      </label>
+      <p className={EDITOR_HINT}>
+        Turn this off to show only the provider&apos;s embed.
+      </p>
     </div>
   );
 }

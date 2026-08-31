@@ -59,6 +59,8 @@ export function withNewBlockIds(
       };
     case "calloutQuote":
       return { ...block, id: nextId() };
+    case "embed":
+      return { ...block, id: nextId() };
   }
 }
 

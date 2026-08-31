@@ -100,6 +100,30 @@ function focusedElement(connected = true) {
 }
 
 describe("sortable editor enhancement", () => {
+  it("offers a visible-frame checkbox for embed blocks", () => {
+    const block: MemberBlock = {
+      id: "embed",
+      type: "embed",
+      variant: "standard",
+      url: "https://open.spotify.com/embed/track/example",
+      title: "Spotify track player",
+      showFrame: true,
+    };
+    const html = renderToStaticMarkup(
+      <BlockInspector
+        block={block}
+        onChange={() => undefined}
+        nextId={() => "next"}
+        assets={[]}
+      />,
+    );
+
+    expect(html).toContain('id="block-embed-show-frame"');
+    expect(html).toMatch(/<input[^>]*type="checkbox"[^>]*checked/);
+    expect(html).toContain("Show HAM frame");
+    expect(html).toContain("show only the provider&#x27;s embed");
+  });
+
   it("keeps pointer and keyboard drops identical to repeated move controls", () => {
     const original = docWith([callout("a"), callout("b"), callout("c")]);
 

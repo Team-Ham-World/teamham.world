@@ -4,6 +4,7 @@ export const MAX_PROJECT_NAME_CHARS = 80;
 export const MAX_PROJECT_TYPE_CHARS = 80;
 export const MAX_LINK_LABEL_CHARS = 80;
 export const MAX_QUOTE_ATTRIBUTION_CHARS = 80;
+export const MAX_EMBED_TITLE_CHARS = 200;
 
 export const MAX_DESCRIPTION_CHARS = 500;
 export const MAX_SUMMARY_CHARS = 500;
@@ -33,6 +34,7 @@ export const MEMBER_PAGE_V2_LIMITS = {
   projectType: MAX_PROJECT_TYPE_CHARS,
   linkLabel: MAX_LINK_LABEL_CHARS,
   quoteAttribution: MAX_QUOTE_ATTRIBUTION_CHARS,
+  embedTitle: MAX_EMBED_TITLE_CHARS,
   description: MAX_DESCRIPTION_CHARS,
   summary: MAX_SUMMARY_CHARS,
   projectDescription: MAX_PROJECT_DESCRIPTION_CHARS,

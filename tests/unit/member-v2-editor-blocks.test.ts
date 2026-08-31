@@ -5,11 +5,13 @@ import {
   buildAdditionalLinksBlock,
   buildCalloutQuoteBlock,
   buildExternalProjectRef,
+  buildEmbedBlock,
   buildFeaturedProjectBlock,
   buildHamProjectRef,
   buildProjectListBlock,
   buildRichTextBlock,
   isLikelyHttpsUrl,
+  parseEmbedInput,
 } from "@/components/member-page-editor/block-catalog";
 import {
   addBlock,
@@ -318,6 +320,15 @@ describe("newly built blocks are valid on arrival", () => {
         nextId,
       ),
       buildRichTextBlock(richTextFixture(), nextId),
+      buildEmbedBlock(
+        {
+          variant: "standard",
+          url: "https://open.spotify.com/embed/track/example",
+          title: "Spotify track player",
+          showFrame: true,
+        },
+        nextId,
+      ),
     ];
 
     for (const block of built) {
@@ -335,6 +346,44 @@ describe("newly built blocks are valid on arrival", () => {
     expect(isLikelyHttpsUrl("javascript:alert(1)")).toBe(false);
     expect(isLikelyHttpsUrl("example.com")).toBe(false);
     expect(isLikelyHttpsUrl("")).toBe(false);
+  });
+
+  it("extracts only safe, typed fields from pasted iframe code", () => {
+    expect(parseEmbedInput(`
+      <iframe
+        src="https://open.spotify.com/embed/track/example?theme=0&amp;utm_source=generator"
+        title="Spotify Embed: Test track"
+        width="100%"
+        height="152"
+        style="border-radius: 20px"
+        onload="alert('not saved')"
+      ></iframe>
+    `)).toEqual({
+      url: "https://open.spotify.com/embed/track/example?theme=0&utm_source=generator",
+      title: "Spotify Embed: Test track",
+      variant: "compact",
+    });
+
+    expect(parseEmbedInput(
+      '<iframe src="https://www.youtube.com/embed/example" width="560" height="315"></iframe>',
+    )).toEqual({
+      url: "https://www.youtube.com/embed/example",
+      title: null,
+      variant: "widescreen",
+    });
+
+    expect(parseEmbedInput("https://player.vimeo.com/video/example")).toEqual({
+      url: "https://player.vimeo.com/video/example",
+      title: null,
+      variant: "standard",
+    });
+  });
+
+  it("rejects iframe input without a credential-free HTTPS source", () => {
+    expect(parseEmbedInput('<iframe src="javascript:alert(1)"></iframe>')).toBeNull();
+    expect(parseEmbedInput('<iframe src="http://example.com/embed"></iframe>')).toBeNull();
+    expect(parseEmbedInput('<iframe src="https://user@example.com/embed"></iframe>')).toBeNull();
+    expect(parseEmbedInput("<script>alert(1)</script>")).toBeNull();
   });
 });
 

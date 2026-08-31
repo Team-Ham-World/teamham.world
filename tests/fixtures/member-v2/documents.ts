@@ -157,13 +157,12 @@ export function canonicalMemberPageDocument(): MemberPageDocumentV2 {
         ],
       },
       {
-        id: "block-projects-compact",
-        type: "projectList",
-        variant: "compact",
-        projects: [{
-          id: "project-compact",
-          project: externalProject("planning", "compact"),
-        }],
+        id: "block-embed",
+        type: "embed",
+        variant: "standard",
+        url: "https://open.spotify.com/embed/track/example",
+        title: "Spotify track player",
+        showFrame: true,
       },
       {
         id: "block-links-list",

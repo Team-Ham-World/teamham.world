@@ -172,6 +172,30 @@ const ALL_BLOCKS: MemberBlock[] = [
     text: "Make the useful thing delightful.",
     attribution: "Ada",
   },
+  {
+    id: "b-embed-compact",
+    type: "embed",
+    variant: "compact",
+    url: "https://open.spotify.com/embed/track/compact-example",
+    title: "Compact audio player",
+    showFrame: true,
+  },
+  {
+    id: "b-embed-standard",
+    type: "embed",
+    variant: "standard",
+    url: "https://open.spotify.com/embed/playlist/standard-example",
+    title: "Standard playlist player",
+    showFrame: true,
+  },
+  {
+    id: "b-embed-widescreen",
+    type: "embed",
+    variant: "widescreen",
+    url: "https://www.youtube.com/embed/widescreen-example",
+    title: "Widescreen video player",
+    showFrame: false,
+  },
 ];
 
 /**
@@ -187,6 +211,7 @@ const FIRST_LANDMARK_BY_BLOCK_TYPE = {
   image: "Prototype night.",
   gallery: "First sketch.",
   calloutQuote: "Currently experimenting with tiny multiplayer games.",
+  embed: "Compact audio player",
 } satisfies Record<MemberBlock["type"], string>;
 
 /** Document-order landmarks; one per rendered block, unique per page. */
@@ -207,6 +232,9 @@ const ORDERED_LANDMARKS: ReadonlyArray<{ blockId: string; landmark: string }> =
       landmark: "Currently experimenting with tiny multiplayer games.",
     },
     { blockId: "b-quote", landmark: "Make the useful thing delightful." },
+    { blockId: "b-embed-compact", landmark: "Compact audio player" },
+    { blockId: "b-embed-standard", landmark: "Standard playlist player" },
+    { blockId: "b-embed-widescreen", landmark: "Widescreen video player" },
   ];
 
 const LANDMARK_BY_BLOCK_ID = new Map(
@@ -320,6 +348,41 @@ describe("shared leaf dispatcher", () => {
     expect(() =>
       renderMemberPageV2LeafBlock(forged, PUBLIC_CONTEXT),
     ).toThrowError(/Unhandled member block type/);
+  });
+
+  it("renders embeds with fixed permissions and without member HTML", () => {
+    const block = ALL_BLOCKS.find(
+      (candidate): candidate is Extract<MemberBlock, { type: "embed" }> =>
+        candidate.id === "b-embed-compact",
+    );
+    if (!block) throw new Error("fixture embed missing");
+
+    const html = renderToStaticMarkup(
+      renderMemberPageV2LeafBlock(block, PUBLIC_CONTEXT),
+    );
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('sandbox="allow-forms allow-popups');
+    expect(html).toContain('referrerPolicy="strict-origin-when-cross-origin"');
+    expect(html).toContain('src="https://open.spotify.com/embed/track/compact-example"');
+    expect(html).not.toContain("dangerouslySetInnerHTML");
+    expect(html).not.toContain("srcDoc");
+  });
+
+  it("can remove every HAM frame element and leave only the embed", () => {
+    const block = ALL_BLOCKS.find(
+      (candidate): candidate is Extract<MemberBlock, { type: "embed" }> =>
+        candidate.id === "b-embed-widescreen",
+    );
+    if (!block) throw new Error("fixture frameless embed missing");
+
+    const html = renderToStaticMarkup(
+      renderMemberPageV2LeafBlock(block, PUBLIC_CONTEXT),
+    );
+    expect(html).toContain('data-embed-frame="hidden"');
+    expect(html).toContain("<iframe");
+    expect(html).not.toContain("card-tilt");
+    expect(html).not.toContain("Open <span");
+    expect(html).not.toContain("youtube.com</p>");
   });
 });
 
@@ -611,6 +674,7 @@ describe("row parity", () => {
         );
         expect(html, `${label} ${ratio}`).toContain(gridClass);
         expect(html, `${label} ${ratio}`).toContain("grid grid-cols-1 gap-14");
+        expect(html, `${label} ${ratio}`).toContain("lg:items-center");
         expect(firstIndexOf(html, "Origin story")).toBeLessThan(
           firstIndexOf(html, "Right-hand side."),
         );

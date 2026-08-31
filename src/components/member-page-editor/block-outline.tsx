@@ -39,6 +39,12 @@ export function blockOutlineSummary(block: MemberBlock): string {
       return `${block.items.length} images`;
     case "calloutQuote":
       return block.text;
+    case "embed":
+      try {
+        return new URL(block.url).hostname.replace(/^www\./u, "");
+      } catch {
+        return block.title;
+      }
   }
 }
 

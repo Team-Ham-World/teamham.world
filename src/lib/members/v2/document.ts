@@ -184,6 +184,15 @@ export interface CalloutQuoteBlock {
   attribution: string | null;
 }
 
+export interface EmbedBlock {
+  id: string;
+  type: "embed";
+  variant: "compact" | "standard" | "widescreen";
+  url: string;
+  title: string;
+  showFrame: boolean;
+}
+
 export type MemberBlock =
   | RichTextBlock
   | FeaturedProjectBlock
@@ -191,7 +200,8 @@ export type MemberBlock =
   | AdditionalLinksBlock
   | ImageBlock
   | GalleryBlock
-  | CalloutQuoteBlock;
+  | CalloutQuoteBlock
+  | EmbedBlock;
 
 export const MEMBER_BLOCK_ROW_RATIOS = ["1:1", "1:2", "2:1"] as const;
 

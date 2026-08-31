@@ -1295,6 +1295,7 @@ describe("MemberPageV2View rows", () => {
       );
 
       expect(html).toContain(gridClass);
+      expect(html).toContain("lg:items-center");
       expect(html).toContain(`data-member-row-ratio="${ratio}"`);
       // Grid children cannot push a track wider than the page.
       expect(html).toContain('class="min-w-0"');

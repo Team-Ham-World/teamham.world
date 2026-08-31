@@ -28,6 +28,7 @@ describe("public renderer stays independent of the editor", () => {
     "components/member-page-v2/blocks/MemberPageV2Image.tsx",
     "components/member-page-v2/blocks/MemberPageV2Gallery.tsx",
     "components/member-page-v2/blocks/MemberPageV2CalloutQuote.tsx",
+    "components/member-page-v2/blocks/MemberPageV2Embed.tsx",
     "components/member-page-v2/index.ts",
   ];
 

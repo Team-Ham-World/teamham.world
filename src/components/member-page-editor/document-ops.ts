@@ -41,6 +41,7 @@ export const BLOCK_TYPE_LABELS: Record<MemberBlock["type"], string> = {
   image: "Image",
   gallery: "Gallery",
   calloutQuote: "Callout or quote",
+  embed: "Embed",
 };
 
 const ROW_LABEL = "Two-block row";

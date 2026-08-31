@@ -13,6 +13,7 @@ import { MemberPageV2AdditionalLinks } from "./MemberPageV2AdditionalLinks";
 import { MemberPageV2Image } from "./MemberPageV2Image";
 import { MemberPageV2Gallery } from "./MemberPageV2Gallery";
 import { MemberPageV2CalloutQuote } from "./MemberPageV2CalloutQuote";
+import { MemberPageV2Embed } from "./MemberPageV2Embed";
 
 /**
  * Image `sizes` hints for one containing viewport, keyed by image-block
@@ -134,6 +135,8 @@ export function renderMemberPageV2LeafBlock(
       );
     case "calloutQuote":
       return <MemberPageV2CalloutQuote block={block} />;
+    case "embed":
+      return <MemberPageV2Embed block={block} />;
     default:
       return assertNeverMemberBlock(block);
   }

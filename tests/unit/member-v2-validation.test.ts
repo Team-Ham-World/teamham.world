@@ -6,6 +6,7 @@ import {
   MAX_BLOCKS,
   MAX_COLLECTION_ITEMS,
   MAX_DOCUMENT_BYTES,
+  MAX_EMBED_TITLE_CHARS,
   MAX_FEATURED_PROJECT_BLOCKS,
   MAX_IMAGE_ALT_CHARS,
   MAX_LINK_DESCRIPTION_CHARS,
@@ -59,6 +60,32 @@ describe("member V2 document validation", () => {
       success: true,
       doc: artworkFirst,
     });
+
+    const compactProjects = canonicalMemberPageDocument();
+    compactProjects.blocks[3] = {
+      id: "block-projects-compact",
+      type: "projectList",
+      variant: "compact",
+      projects: [{
+        id: "project-compact",
+        project: { kind: "ham", projectSlug: "untitled-quiz-show" },
+      }],
+    };
+    expect(parseMemberPageDocumentV2(compactProjects)).toEqual({
+      success: true,
+      doc: compactProjects,
+    });
+
+    for (const variant of ["compact", "widescreen"] as const) {
+      const embedVariant = canonicalMemberPageDocument();
+      const embed = embedVariant.blocks[3];
+      if (embed.type !== "embed") throw new Error("fixture mismatch");
+      embed.variant = variant;
+      expect(parseMemberPageDocumentV2(embedVariant)).toEqual({
+        success: true,
+        doc: embedVariant,
+      });
+    }
   });
 
   it("normalizes member-authored strings and nullable optionals", () => {
@@ -85,6 +112,29 @@ describe("member V2 document validation", () => {
     }
   });
 
+  it("defaults pre-control embeds to a visible frame and validates new values", () => {
+    const legacy = minimalMemberPageDocument() as unknown as Record<string, unknown>;
+    legacy.blocks = [{
+      id: "legacy-embed",
+      type: "embed",
+      variant: "standard",
+      url: "https://open.spotify.com/embed/track/example",
+      title: "Spotify track player",
+    }];
+
+    const parsed = parseMemberPageDocumentV2(legacy);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      const [embed] = parsed.doc.blocks;
+      expect(embed?.type).toBe("embed");
+      if (embed?.type === "embed") expect(embed.showFrame).toBe(true);
+    }
+
+    const invalid = structuredClone(legacy);
+    ((invalid.blocks as Record<string, unknown>[])[0]).showFrame = "no";
+    expectFailure(invalid, ["blocks", 0, "showFrame"]);
+  });
+
   it("rejects unknown keys at every closed-object boundary", () => {
     const root = minimalMemberPageDocument() as unknown as Record<string, unknown>;
     root.extra = true;
@@ -102,6 +152,11 @@ describe("member V2 document validation", () => {
     const image = ((imageDoc.blocks as Record<string, unknown>[])[6]).image as Record<string, unknown>;
     image.src = "https://images.example/remote.png";
     expectFailure(imageDoc, ["blocks", 6, "image", "src"]);
+
+    const embedDoc = canonicalMemberPageDocument() as unknown as Record<string, unknown>;
+    ((embedDoc.blocks as Record<string, unknown>[])[3]).html =
+      '<iframe src="https://open.spotify.com/embed/track/example"></iframe>';
+    expectFailure(embedDoc, ["blocks", 3, "html"]);
   });
 
   it("rejects member-authored colors and style controls", () => {
@@ -229,6 +284,7 @@ describe("member V2 document validation", () => {
     link.label = "x".repeat(MAX_LINK_LABEL_CHARS);
     link.description = "x".repeat(MAX_LINK_DESCRIPTION_CHARS);
     image.alt = "x".repeat(MAX_IMAGE_ALT_CHARS);
+    blocks[3].title = "x".repeat(MAX_EMBED_TITLE_CHARS);
     blocks[6].caption = "x".repeat(500);
     blocks[10].text = "x".repeat(500);
     blocks[11].attribution = "x".repeat(MAX_QUOTE_ATTRIBUTION_CHARS);
@@ -249,6 +305,7 @@ describe("member V2 document validation", () => {
         const project = ((((doc.blocks as Record<string, unknown>[])[2].projects as Record<string, unknown>[])[1]).project) as Record<string, unknown>;
         project.shortDescription = "x".repeat(MAX_PROJECT_DESCRIPTION_CHARS + 1);
       }, ["blocks", 2, "projects", 1, "project", "shortDescription"]],
+      [(doc) => { ((doc.blocks as Record<string, unknown>[])[3]).title = "x".repeat(MAX_EMBED_TITLE_CHARS + 1); }, ["blocks", 3, "title"]],
       [(doc) => {
         (((doc.blocks as Record<string, unknown>[])[4].links as Record<string, unknown>[])[0]).label = "x".repeat(MAX_LINK_LABEL_CHARS + 1);
       }, ["blocks", 4, "links", 0, "label"]],
@@ -315,6 +372,9 @@ describe("member V2 document validation", () => {
       [(doc) => {
         (((doc.blocks as Record<string, unknown>[])[4].links as Record<string, unknown>[])[0]).url = "/relative";
       }, ["blocks", 4, "links", 0, "url"]],
+      [(doc) => {
+        ((doc.blocks as Record<string, unknown>[])[3]).url = "javascript:alert(1)";
+      }, ["blocks", 3, "url"]],
     ];
     for (const [mutate, path] of credentialCases) {
       const doc = canonicalMemberPageDocument() as unknown as Record<string, unknown>;
