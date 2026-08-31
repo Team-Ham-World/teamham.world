@@ -54,7 +54,7 @@ export function MemberPageV2View({
       <MemberPageThemeStyle theme={theme} />
       {headerSlotBlock ? (
         <div
-          className="lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-14"
+          className="lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-center lg:gap-14"
           data-profile-showcase="true"
         >
           <MemberPageV2Frame

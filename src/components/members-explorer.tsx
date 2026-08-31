@@ -50,7 +50,7 @@ export function MembersExplorer({ members }: { members: MemberDirectoryItem[] })
       </p>
 
       {visibleMembers.length > 0 ? (
-        <ul className="mt-8 grid gap-x-7 gap-y-10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <ul className="mt-8 grid items-start gap-x-7 gap-y-10 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {visibleMembers.map((member, index) => (
             <li
               key={member.slug}
@@ -60,14 +60,14 @@ export function MembersExplorer({ members }: { members: MemberDirectoryItem[] })
             >
               <Link
                 href={memberPath(member.slug)}
-                className={`${styles.link} flex min-h-56 w-full flex-col border-2 border-ink bg-paper p-5 shadow-[5px_5px_0_0_var(--color-ink)] focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-interactive-blue`}
+                className={`${styles.link} flex h-64 w-full flex-col overflow-hidden border-2 border-ink bg-paper p-5 shadow-[5px_5px_0_0_var(--color-ink)] focus-visible:outline-3 focus-visible:outline-offset-4 focus-visible:outline-interactive-blue`}
               >
-                <span aria-hidden="true" className="mb-5 inline-flex h-10 w-10 items-center justify-center rounded-full border-2 border-ink bg-surface font-display text-xl">
+                <span aria-hidden="true" className="mb-5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 border-ink bg-surface font-display text-xl">
                   {member.displayName.slice(0, 1).toLocaleUpperCase()}
                 </span>
-                <span className="font-display text-2xl leading-tight">{member.displayName}</span>
-                {member.blurb ? <span className="mt-3 line-clamp-4 text-sm leading-relaxed text-muted">{member.blurb}</span> : null}
-                <span className="mt-auto pt-5 text-xs font-bold tracking-[0.14em] text-interactive-blue uppercase">
+                <span className="line-clamp-2 font-display text-2xl leading-tight">{member.displayName}</span>
+                {member.blurb ? <span className="mt-3 line-clamp-2 text-sm leading-relaxed text-muted">{member.blurb}</span> : null}
+                <span className="mt-auto shrink-0 pt-5 text-xs font-bold tracking-[0.14em] text-interactive-blue uppercase">
                   Explore their page <span aria-hidden="true">&#8594;</span>
                 </span>
               </Link>

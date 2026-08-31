@@ -534,6 +534,8 @@ describe("showcase eligibility and body order", () => {
     ] as const) {
       expect(html, label).toContain('data-member-layout="showcase"');
       expect(html, label).toContain('data-profile-showcase="true"');
+      expect(html, label).toContain("lg:items-center");
+      expect(html, label).not.toContain("lg:items-start");
       expect(html, label).toContain('data-featured-project-layout="showcase"');
       expect(html, label).not.toContain(
         'data-featured-project-layout="standard"',

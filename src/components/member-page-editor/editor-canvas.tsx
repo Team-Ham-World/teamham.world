@@ -146,7 +146,7 @@ export function EditorCanvas({
       <div
         className={
           headerSlotBlock
-            ? "lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-start lg:gap-x-14"
+            ? "lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:items-center lg:gap-x-14"
             : undefined
         }
         data-profile-showcase={headerSlotBlock ? "true" : undefined}
