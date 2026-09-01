@@ -64,6 +64,19 @@ export function hasExpandableContent(project: Project): boolean {
 
 export const PROJECTS: Project[] = [
   {
+    slug: "puffton",
+    name: "Puffton",
+    shortDescription:
+      "A Team HAM hexagonal settlement strategy game inspired by Colonist.io. Complete with maps, colors, expansions, and member leaderboards.",
+    type: "game",
+    status: "playable",
+    makers: [],
+    featured: true,
+    links: {
+      publicUrl: "/puffton",
+    },
+  },
+  {
     // Provisional slug — must be finalized before any external sharing.
     slug: "untitled-quiz-show",
     name: "Untitled quiz-show game",
