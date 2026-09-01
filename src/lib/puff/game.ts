@@ -52,9 +52,6 @@ const FIRST_GATE_DISTANCE = 250;
 const MIN_GAP_HEIGHT = 150;
 const MAX_GAP_HEIGHT = 180;
 const EDGE_MARGIN = 23;
-const SIMULATION_FRAMES_PER_SECOND = 60;
-const CONTROL_REACTION_RESERVE_FRAMES = 15;
-const SAFE_CONTROLLED_VERTICAL_SPEED = 180;
 
 function nextRandom(state: PuffGameState): number {
   let value = state.rng || 0x6d2b79f5;
@@ -85,19 +82,15 @@ function gateSpeedForScore(score: number): number {
   return BASE_GATE_SPEED + Math.min(MAX_SPEED_BONUS, score * SPEED_PER_POINT);
 }
 
-function maxReachableGapCenterDelta(distance: number, speed: number): number {
-  const freeFrames = Math.floor(
-    (Math.max(0, distance - GATE_WIDTH - PUFF_RADIUS * 2) *
-      SIMULATION_FRAMES_PER_SECOND) /
-      speed,
-  );
-  const controlFrames = Math.max(
-    0,
-    freeFrames - CONTROL_REACTION_RESERVE_FRAMES,
-  );
+function displacementAfterFlap(time: number): number {
+  const timeToMaxFall = (MAX_FALL_VELOCITY - FLAP_VELOCITY) / GRAVITY;
+  const acceleratingTime = Math.min(time, timeToMaxFall);
+  const acceleratingDisplacement =
+    FLAP_VELOCITY * acceleratingTime +
+    (GRAVITY * acceleratingTime * acceleratingTime) / 2;
   return (
-    controlFrames *
-    (SAFE_CONTROLLED_VERTICAL_SPEED / SIMULATION_FRAMES_PER_SECOND)
+    acceleratingDisplacement +
+    MAX_FALL_VELOCITY * Math.max(0, time - timeToMaxFall)
   );
 }
 
@@ -124,12 +117,35 @@ function randomGapY(
       (gate) => !gate.scored && gate.x <= predecessor.x,
     ).length;
     const speed = gateSpeedForScore(state.score + unscoredBeforePredecessor);
-    const maxDelta = maxReachableGapCenterDelta(
-      x - predecessor.x,
-      speed,
+    const travelTime =
+      Math.max(
+        0,
+        x - predecessor.x - GATE_WIDTH - PUFF_RADIUS * 2,
+      ) / speed;
+    const predecessorClearance = predecessor.gapHeight / 2 - PUFF_RADIUS;
+    const successorClearance = gapHeight / 2 - PUFF_RADIUS;
+    const legalBirdMin = PUFF_RADIUS;
+    const legalBirdMax = playableBottom(state) - PUFF_RADIUS;
+    const reachableMin = Math.max(
+      legalBirdMin,
+      Math.min(
+        legalBirdMax,
+        predecessor.gapY -
+          predecessorClearance +
+          FLAP_VELOCITY * travelTime,
+      ),
     );
-    min = Math.max(legalMin, predecessor.gapY - maxDelta);
-    max = Math.min(legalMax, predecessor.gapY + maxDelta);
+    const reachableMax = Math.max(
+      legalBirdMin,
+      Math.min(
+        legalBirdMax,
+        predecessor.gapY +
+          predecessorClearance +
+          displacementAfterFlap(travelTime),
+      ),
+    );
+    min = Math.max(legalMin, reachableMin - successorClearance);
+    max = Math.min(legalMax, reachableMax + successorClearance);
 
     if (min > max) {
       min = Math.max(legalMin, Math.min(legalMax, predecessor.gapY));
