@@ -47,7 +47,7 @@ test.describe("Puffcade", () => {
     const card = page.getByRole("link", { name: "Play Flappy Puff" });
     await expect(card).toHaveCount(1);
     await expect(card).toHaveAttribute("href", "/puffcade/flappy-puff");
-    await expect(page.getByText("PLAYABLE", { exact: true })).toBeVisible();
+    await expect(card.getByText("PLAYABLE", { exact: true })).toBeVisible();
     await expect(
       page.getByRole("heading", { name: "FLAPPY PUFF.EXE" }),
     ).toHaveCount(0);
@@ -302,5 +302,187 @@ test.describe("Puffcade", () => {
         () => document.documentElement.scrollWidth <= window.innerWidth,
       ),
     ).toBe(true);
+  });
+});
+
+test.describe("Puff Print Run", () => {
+  test.beforeEach(async () => {
+    await skipUnlessAppUp();
+  });
+
+  test("is discoverable from the catalog beside Flappy Puff", async ({
+    page,
+  }) => {
+    await page.goto("/puffcade");
+
+    await expect(
+      page.getByRole("link", { name: "Play Flappy Puff" }),
+    ).toBeVisible();
+    const card = page.getByRole("link", { name: "Play Puff Print Run" });
+    await expect(card).toHaveCount(1);
+    await expect(card).toHaveAttribute("href", "/puffcade/puff-print-run");
+  });
+
+  test("catalog Link opens the game and native Back returns to the catalog", async ({
+    page,
+  }) => {
+    await page.goto("/puffcade");
+    await page.getByRole("link", { name: "Play Puff Print Run" }).click();
+    await expect(page).toHaveURL(/\/puffcade\/puff-print-run$/);
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(
+      game.getByRole("heading", { level: 1, name: "PUFF PRINT RUN.EXE" }),
+    ).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/puffcade$/);
+    await expect(
+      page.getByRole("link", { name: "Play Puff Print Run" }),
+    ).toBeVisible();
+  });
+
+  test("serves at its own route with metadata, fullscreen shell, and start via Space", async ({
+    page,
+  }) => {
+    const response = await page.goto("/puffcade/puff-print-run");
+
+    expect(response?.status()).toBe(200);
+    await expect(page).toHaveTitle("Puff Print Run");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://teamham.world/puffcade/puff-print-run",
+    );
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+      "content",
+      "noindex, nofollow",
+    );
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+    await expect(
+      game.getByRole("heading", { level: 1, name: "PUFF PRINT RUN.EXE" }),
+    ).toBeVisible();
+    await expect(game.locator("[data-puff-print-run-canvas]")).toBeVisible();
+    await expect(
+      game.getByRole("button", { name: /start the run/i }),
+    ).toBeVisible();
+    await expect(
+      game.getByRole("button", { name: /exit transmission/i }),
+    ).toBeVisible();
+
+    await expect(page.locator("body > header")).toBeHidden();
+
+    await page.keyboard.press("Space");
+    await expect(
+      game.getByRole("button", { name: /start the run/i }),
+    ).toHaveCount(0);
+  });
+
+  test("Escape pauses while playing and exits from paused", async ({
+    page,
+  }) => {
+    await page.goto("/puffcade/puff-print-run");
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await game.getByRole("button", { name: /start the run/i }).click();
+
+    await page.keyboard.press("Escape");
+    await expect(game.getByRole("button", { name: /^resume$/i })).toBeVisible();
+
+    // A second Escape leaves the game instead of resuming it.
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL(/\/puffcade$/);
+    await expect(
+      page.locator('[data-arcade-shell="fullscreen"]'),
+    ).toHaveCount(0);
+  });
+
+  test("shows accessible direction controls at mobile size without covering the exit", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/puffcade/puff-print-run");
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+
+    const controls = game.locator("[data-puff-print-run-controls]");
+    await expect(controls).toBeVisible();
+    for (const name of [/steer up/i, /steer down/i, /steer left/i, /steer right/i]) {
+      const button = controls.getByRole("button", { name });
+      await expect(button).toBeVisible();
+      // Default focusable: no negative tabindex on these real controls.
+      await expect(button).not.toHaveAttribute("tabindex", "-1");
+      expect(await button.evaluate((el) => el.tabIndex)).toBe(0);
+    }
+
+    const canvas = game.locator("[data-puff-print-run-canvas]");
+    await expect(canvas).toBeVisible();
+
+    // The arena gets nearly the full viewport width; the controls stack below
+    // it rather than sharing its width. Generous floor so this stays
+    // non-brittle across small padding changes.
+    const canvasBox = await canvas.boundingBox();
+    const controlsBox = await controls.boundingBox();
+    if (!canvasBox || !controlsBox) {
+      throw new Error("The mobile game layout did not produce layout boxes.");
+    }
+    expect(canvasBox.width).toBeGreaterThanOrEqual(330);
+    expect(controlsBox.y).toBeGreaterThanOrEqual(
+      canvasBox.y + canvasBox.height,
+    );
+
+    // Backing store and CSS box must agree — a mismatch leaves unpainted
+    // pixels inside the arena.
+    const coherence = await canvas.evaluate((el) => {
+      const target = el as HTMLCanvasElement;
+      const rect = target.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      return {
+        cssWidth: rect.width,
+        cssHeight: rect.height,
+        backingWidth: target.width,
+        backingHeight: target.height,
+        ratio,
+      };
+    });
+    expect(
+      Math.abs(coherence.backingWidth - coherence.cssWidth * coherence.ratio),
+    ).toBeLessThanOrEqual(coherence.ratio + 1);
+    expect(
+      Math.abs(coherence.backingHeight - coherence.cssHeight * coherence.ratio),
+    ).toBeLessThanOrEqual(coherence.ratio + 1);
+
+    await expect(
+      game.getByRole("button", { name: /exit transmission/i }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+  });
+
+  test("explicit exit replaces history so Back cannot reopen the game", async ({
+    page,
+  }) => {
+    await page.goto("/puffcade");
+    await page.getByRole("link", { name: "Play Puff Print Run" }).click();
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+
+    await game.getByRole("button", { name: /exit transmission/i }).click();
+    await expect(page).toHaveURL(/\/puffcade$/);
+    await expect(
+      page.getByRole("link", { name: "Play Puff Print Run" }),
+    ).toBeVisible();
+
+    await page.goBack();
+    await expect(page).not.toHaveURL(/\/puffcade\/puff-print-run/);
+    await expect(
+      page.locator('[data-arcade-shell="fullscreen"]'),
+    ).toHaveCount(0);
   });
 });
