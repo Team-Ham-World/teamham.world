@@ -20,6 +20,12 @@ export function SiteFooter() {
             Puffton
           </Link>
           <Link
+            href="/puffdle"
+            className="text-interactive-blue underline decoration-2 underline-offset-4"
+          >
+            Puffdle
+          </Link>
+          <Link
             href="/privacy"
             className="text-interactive-blue underline decoration-2 underline-offset-4"
           >

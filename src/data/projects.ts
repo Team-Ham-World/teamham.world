@@ -77,6 +77,19 @@ export const PROJECTS: Project[] = [
     },
   },
   {
+    slug: "puffdle",
+    name: "Puffdle",
+    shortDescription:
+      "A daily and unlimited 5-letter word decoding game with member leaderboards.",
+    type: "game",
+    status: "playable",
+    makers: [],
+    featured: true,
+    links: {
+      publicUrl: "/puffdle",
+    },
+  },
+  {
     // Provisional slug — must be finalized before any external sharing.
     slug: "untitled-quiz-show",
     name: "Untitled quiz-show game",
