@@ -1,23 +1,14 @@
-.dialog {
+.game {
   position: fixed;
   inset: 0;
+  z-index: 30;
   width: 100vw;
   height: 100dvh;
-  max-width: none;
-  max-height: none;
   margin: 0;
   padding: 0;
   overflow: hidden;
   color: var(--color-ink);
   background: var(--color-paper);
-  border: 0;
-}
-
-.dialog::backdrop {
-  background: color-mix(in srgb, var(--color-ink) 88%, transparent);
-}
-
-.dialog[open] {
   animation: feed-in 360ms steps(5, end) both;
 }
 
@@ -79,7 +70,7 @@
   color: var(--color-decorative-red);
 }
 
-.titleBlock h2 {
+.titleBlock h1 {
   margin-top: 0.18rem;
   font-family: var(--font-display);
   font-size: clamp(1.2rem, 3vw, 2rem);
@@ -497,7 +488,7 @@
 }
 
 @media (any-pointer: coarse) {
-  .dialog[open] {
+  .game {
     animation: none;
   }
 
@@ -513,8 +504,7 @@
 
 @media (max-width: 28rem), (max-height: 34rem) {
   .titleBlock p,
-  .memberState,
-  .footer button {
+  .memberState {
     display: none;
   }
 
@@ -551,7 +541,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dialog[open] {
+  .game {
     animation: none;
   }
 

@@ -100,6 +100,21 @@ body:has([data-editor-workspace="app-shell"]) > header {
 }
 
 /*
+ * A fullscreen arcade shell owns the viewport the same way the editor does.
+ * The shared header would be duplicate chrome over the game and the page
+ * behind must not scroll while the shell is up.
+ */
+body:has([data-arcade-shell="fullscreen"]) {
+  --nav-height: 0px;
+
+  overflow: hidden;
+}
+
+body:has([data-arcade-shell="fullscreen"]) > header {
+  display: none;
+}
+
+/*
  * A member page dresses the whole sheet.
  *
  * The reviewed palette a member picks reaches the document root through the

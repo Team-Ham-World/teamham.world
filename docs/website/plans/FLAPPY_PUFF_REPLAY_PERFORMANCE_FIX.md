@@ -3,7 +3,7 @@
 **Document Status**: IMPLEMENTED / VERIFIED
 **Date Diagnosed**: 2026-08-25
 **Date Implemented**: 2026-08-26
-**Primary Code**: `src/components/puff-game.tsx`
+**Primary Code**: `src/app/puffcade/flappy-puff/flappy-puff-game.tsx`
 **Test Seam**: `src/lib/puff/performance.ts` and `tests/unit/puff-performance.test.ts`
 
 ## 1. Purpose and scope
@@ -36,7 +36,7 @@ The same probe found no duplicate animation loop on immediate replay, no game-ca
 
 ## 3. Root cause
 
-In the empty-dependency canvas effect inside `PuffGame`, the frame callback currently:
+In the empty-dependency canvas effect inside `FlappyPuffGame`, the frame callback currently:
 
 1. adds every animation-frame interval to `renderAccumulatorMs`;
 2. treats only `ready` and `playing` as moving phases;
@@ -122,7 +122,7 @@ Keep the implementation limited to the scheduler, its shared pure test seam, and
 ## 9. Implementation record
 
 - `src/lib/puff/performance.ts` owns the phase-aware render clock through `advancePuffRenderClock()`.
-- `src/components/puff-game.tsx` uses that clock for every canvas frame and no longer accumulates render time during `dead` or `paused`.
+- `src/app/puffcade/flappy-puff/flappy-puff-game.tsx` uses that clock for every canvas frame and no longer accumulates render time during `dead` or `paused`.
 - `tests/unit/puff-performance.test.ts` runs deterministic 120 Hz sequences through first run, death, replay, pause, and resume.
 - Targeted tests passed: 13/13 across the Puff game and performance suites.
 - Full test suite passed: 836 tests passed and 82 environment-dependent tests skipped.

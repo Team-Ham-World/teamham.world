@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -23,7 +24,7 @@ import {
 } from "@/lib/puff/performance";
 import { renderPuff } from "@/lib/puff/render";
 
-import styles from "./puff-game.module.css";
+import styles from "./flappy-puff-game.module.css";
 
 type GamePhase = PuffRenderPhase;
 type SpritePose = "level" | "up" | "down" | "dead";
@@ -339,12 +340,11 @@ function Leaderboard({ state }: { state: LeaderboardState }) {
   );
 }
 
-export function PuffGame({ onExit }: { onExit: () => void }) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
+export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
+  const router = useRouter();
   const arenaRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<PuffGameState | null>(null);
-  const atlasRef = useRef<PuffSpriteAtlas | null>(null);
   const phaseRef = useRef<GamePhase>("ready");
   const finishRunRef = useRef<(score: number) => void>(() => {});
   const [phase, setPhaseState] = useState<GamePhase>("ready");
@@ -480,38 +480,9 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
   }, [createFreshRun, setPhase]);
 
   const exitGame = useCallback(() => {
-    const dialog = dialogRef.current;
-    if (dialog?.open) dialog.close();
-    document.body.style.overflow = "";
-    onExit();
-  }, [onExit]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    dialog.showModal();
-    dialog.focus();
-    atlasRef.current = buildPuffSpriteAtlas();
-
-    const onCancel = (event: Event) => {
-      event.preventDefault();
-      if (phaseRef.current === "playing") {
-        setPhase("paused");
-        setAnnouncement("Game paused.");
-      } else if (phaseRef.current === "paused") {
-        setPhase("playing");
-      } else {
-        exitGame();
-      }
-    };
-    dialog.addEventListener("cancel", onCancel);
-    return () => {
-      dialog.removeEventListener("cancel", onCancel);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [exitGame, setPhase]);
+    // replace() so Back cannot reopen a run the player explicitly exited.
+    router.replace(exitHref);
+  }, [router, exitHref]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -564,6 +535,7 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
     });
     if (!context) return;
 
+    const atlas = buildPuffSpriteAtlas();
     let needsRedraw = true;
     let lastDrawnPhase: GamePhase | null = null;
     const coarsePointer =
@@ -587,7 +559,7 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
       canvas.height = Math.round(height * ratio);
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.imageSmoothingEnabled = false;
-      context.fillStyle = atlasRef.current?.palette.surface ?? "#fffdf6";
+      context.fillStyle = atlas.palette.surface;
       context.fillRect(0, 0, width, height);
       if (gameRef.current) resizePuffGame(gameRef.current, width, height);
       else gameRef.current = createPuffGame(width, height);
@@ -602,7 +574,6 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
     let renderAccumulatorMs = 0;
     const frame = (now: number) => {
       const game = gameRef.current;
-      const atlas = atlasRef.current;
       const currentPhase = phaseRef.current;
       const elapsedMs = Math.max(0, now - previous);
       const delta = Math.min(MAX_FRAME_DELTA, elapsedMs / 1_000);
@@ -658,9 +629,9 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
   const bestScore = Math.max(localBest, memberBest);
 
   return (
-    <dialog
-      ref={dialogRef}
-      className={styles.dialog}
+    <main
+      className={styles.game}
+      data-arcade-shell="fullscreen"
       aria-labelledby="puff-game-title"
       aria-describedby="puff-game-description"
     >
@@ -668,7 +639,7 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
         <header className={styles.header}>
           <div className={styles.titleBlock}>
             <p>Secret transmission // No. 10</p>
-            <h2 id="puff-game-title">FLAPPY PUFF.EXE</h2>
+            <h1 id="puff-game-title">FLAPPY PUFF.EXE</h1>
           </div>
           <div className={styles.stats} aria-label="Current game statistics">
             <p>
@@ -785,6 +756,6 @@ export function PuffGame({ onExit }: { onExit: () => void }) {
         </p>
         <p className="sr-only" aria-live="polite">{announcement}</p>
       </div>
-    </dialog>
+    </main>
   );
 }
