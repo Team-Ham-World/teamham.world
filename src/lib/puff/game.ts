@@ -52,6 +52,9 @@ const FIRST_GATE_DISTANCE = 250;
 const MIN_GAP_HEIGHT = 150;
 const MAX_GAP_HEIGHT = 180;
 const EDGE_MARGIN = 23;
+const SIMULATION_FRAMES_PER_SECOND = 60;
+const CONTROL_REACTION_RESERVE_FRAMES = 15;
+const SAFE_CONTROLLED_VERTICAL_SPEED = 180;
 
 function nextRandom(state: PuffGameState): number {
   let value = state.rng || 0x6d2b79f5;
@@ -78,25 +81,75 @@ function gateCount(state: PuffGameState): number {
   return Math.max(4, Math.ceil(coverage / gateSpacing(state)));
 }
 
+function gateSpeedForScore(score: number): number {
+  return BASE_GATE_SPEED + Math.min(MAX_SPEED_BONUS, score * SPEED_PER_POINT);
+}
+
+function maxReachableGapCenterDelta(distance: number, speed: number): number {
+  const freeFrames = Math.floor(
+    (Math.max(0, distance - GATE_WIDTH - PUFF_RADIUS * 2) *
+      SIMULATION_FRAMES_PER_SECOND) /
+      speed,
+  );
+  const controlFrames = Math.max(
+    0,
+    freeFrames - CONTROL_REACTION_RESERVE_FRAMES,
+  );
+  return (
+    controlFrames *
+    (SAFE_CONTROLLED_VERTICAL_SPEED / SIMULATION_FRAMES_PER_SECOND)
+  );
+}
+
 function gapHeightForScore(state: PuffGameState): number {
   const available = playableBottom(state) - EDGE_MARGIN * 2;
   const difficultyGap = MAX_GAP_HEIGHT - Math.min(30, state.score);
   return Math.min(available, Math.max(MIN_GAP_HEIGHT, difficultyGap));
 }
 
-function randomGapY(state: PuffGameState, gapHeight: number): number {
+function randomGapY(
+  state: PuffGameState,
+  gapHeight: number,
+  predecessor?: TonerGate,
+  x?: number,
+): number {
   const half = gapHeight / 2;
-  const min = EDGE_MARGIN + half;
-  const max = playableBottom(state) - EDGE_MARGIN - half;
-  return min + nextRandom(state) * Math.max(1, max - min);
+  const legalMin = EDGE_MARGIN + half;
+  const legalMax = playableBottom(state) - EDGE_MARGIN - half;
+  let min = legalMin;
+  let max = legalMax;
+
+  if (predecessor && x !== undefined) {
+    const unscoredBeforePredecessor = state.gates.filter(
+      (gate) => !gate.scored && gate.x <= predecessor.x,
+    ).length;
+    const speed = gateSpeedForScore(state.score + unscoredBeforePredecessor);
+    const maxDelta = maxReachableGapCenterDelta(
+      x - predecessor.x,
+      speed,
+    );
+    min = Math.max(legalMin, predecessor.gapY - maxDelta);
+    max = Math.min(legalMax, predecessor.gapY + maxDelta);
+
+    if (min > max) {
+      min = Math.max(legalMin, Math.min(legalMax, predecessor.gapY));
+      max = min;
+    }
+  }
+
+  return min + nextRandom(state) * Math.max(0, max - min);
 }
 
-function createGate(state: PuffGameState, x: number): TonerGate {
+function createGate(
+  state: PuffGameState,
+  x: number,
+  predecessor?: TonerGate,
+): TonerGate {
   const gapHeight = gapHeightForScore(state);
   return {
     id: state.nextGateId++,
     x,
-    gapY: randomGapY(state, gapHeight),
+    gapY: randomGapY(state, gapHeight, predecessor, x),
     gapHeight,
     scored: false,
     pattern: Math.floor(nextRandom(state) * 4),
@@ -130,8 +183,11 @@ export function createPuffGame(
 
   const firstX = Math.max(safeWidth * 0.68, state.bird.x + FIRST_GATE_DISTANCE);
   const spacing = gateSpacing(state);
+  let predecessor: TonerGate | undefined;
   for (let index = 0; index < gateCount(state); index++) {
-    state.gates.push(createGate(state, firstX + index * spacing));
+    const gate = createGate(state, firstX + index * spacing, predecessor);
+    state.gates.push(gate);
+    predecessor = gate;
   }
   return state;
 }
@@ -183,14 +239,22 @@ function hitsGate(state: PuffGameState, gate: TonerGate): boolean {
 }
 
 function recycleGate(state: PuffGameState, gate: TonerGate): void {
-  const furthestX = Math.max(...state.gates.map((candidate) => candidate.x));
+  const predecessor = state.gates.reduce<TonerGate | undefined>(
+    (furthest, candidate) =>
+      candidate !== gate && (!furthest || candidate.x > furthest.x)
+        ? candidate
+        : furthest,
+    undefined,
+  );
+  if (!predecessor) return;
+
   const gapHeight = gapHeightForScore(state);
   gate.x = Math.max(
     state.width + GATE_WIDTH,
-    furthestX + gateSpacing(state),
+    predecessor.x + gateSpacing(state),
   );
   gate.gapHeight = gapHeight;
-  gate.gapY = randomGapY(state, gapHeight);
+  gate.gapY = randomGapY(state, gapHeight, predecessor, gate.x);
   gate.scored = false;
   gate.pattern = Math.floor(nextRandom(state) * 4);
 }
@@ -202,8 +266,7 @@ export function stepPuffGame(
   if (state.status !== "playing" || deltaSeconds <= 0) return GAME_EVENT.NONE;
 
   const delta = Math.min(0.05, deltaSeconds);
-  const speed =
-    BASE_GATE_SPEED + Math.min(MAX_SPEED_BONUS, state.score * SPEED_PER_POINT);
+  const speed = gateSpeedForScore(state.score);
   state.elapsed += delta;
   state.groundOffset += speed * delta;
 

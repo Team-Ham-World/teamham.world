@@ -11,6 +11,17 @@ import {
   stepPuffGame,
 } from "@/lib/puff/game";
 
+function expectedGateSpeed(score: number): number {
+  return 168 + Math.min(58, score * 2.6);
+}
+
+function expectedReachableDelta(distance: number, speed: number): number {
+  const freeFrames = Math.floor(
+    (Math.max(0, distance - GATE_WIDTH - PUFF_RADIUS * 2) * 60) / speed,
+  );
+  return Math.max(0, freeFrames - 15) * (180 / 60);
+}
+
 describe("Flappy Puff game model", () => {
   it("creates a deterministic ready run with generous toner-gate spacing", () => {
     const first = createPuffGame(1280, 600, 1234);
@@ -23,6 +34,60 @@ describe("Flappy Puff game model", () => {
     expect(first.gates[1].x - first.gates[0].x).toBeGreaterThanOrEqual(320);
     expect(first.gates[1].x - first.gates[0].x).toBeLessThanOrEqual(400);
     expect(first.gates[0].gapHeight).toBeGreaterThanOrEqual(170);
+  });
+
+  it("keeps each initial gate vertically reachable from its predecessor", () => {
+    const state = createPuffGame(320, 600, 1);
+
+    for (let index = 1; index < state.gates.length; index++) {
+      const predecessor = state.gates[index - 1];
+      const gate = state.gates[index];
+      const distance = gate.x - predecessor.x;
+      const forecastScore = index;
+
+      expect(Math.abs(gate.gapY - predecessor.gapY)).toBeLessThanOrEqual(
+        expectedReachableDelta(distance, expectedGateSpeed(forecastScore)),
+      );
+    }
+  });
+
+  it("tightens recycled gate reachability as speed increases", () => {
+    function recycleAtScore(score: number) {
+      const state = createPuffGame(320, 600, 1234);
+      flapPuff(state);
+      state.score = score;
+      state.bird.y = 279;
+      state.bird.velocityY = 0;
+
+      const [recycled, ...remaining] = state.gates;
+      recycled.x = -GATE_WIDTH - 20;
+      recycled.scored = true;
+      remaining.forEach((gate, index) => {
+        gate.x = 400 + index * 320;
+        gate.gapY = 279;
+        gate.gapHeight = 500;
+        gate.scored = false;
+      });
+      const predecessor = remaining.at(-1)!;
+
+      stepPuffGame(state, 1 / 60);
+
+      return {
+        delta: Math.abs(recycled.gapY - predecessor.gapY),
+        maxDelta: expectedReachableDelta(
+          recycled.x - predecessor.x,
+          expectedGateSpeed(score + remaining.length),
+        ),
+      };
+    }
+
+    const lowSpeed = recycleAtScore(0);
+    const highSpeed = recycleAtScore(100);
+
+    expect(lowSpeed.delta).toBeLessThanOrEqual(lowSpeed.maxDelta);
+    expect(highSpeed.delta).toBeLessThanOrEqual(highSpeed.maxDelta);
+    expect(highSpeed.delta).toBeLessThanOrEqual(lowSpeed.delta);
+    expect(highSpeed.maxDelta).toBeLessThanOrEqual(lowSpeed.maxDelta);
   });
 
   it("starts on the first flap and applies upward velocity", () => {
