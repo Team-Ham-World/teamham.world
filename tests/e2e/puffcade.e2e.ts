@@ -100,6 +100,74 @@ test.describe("Puffcade", () => {
     ).toBe(true);
   });
 
+  test("renders only the ground motif as live gameplay text", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const fillText = CanvasRenderingContext2D.prototype.fillText;
+
+      Reflect.set(
+        CanvasRenderingContext2D.prototype,
+        "fillText",
+        function (
+          this: CanvasRenderingContext2D,
+          text: string,
+          x: number,
+          y: number,
+          maxWidth?: number,
+        ) {
+          if (this.canvas.isConnected) {
+            const calls = this.canvas.dataset.connectedFillTextCalls;
+            this.canvas.dataset.connectedFillTextCalls = calls
+              ? `${calls}\n${text}`
+              : text;
+          }
+
+          return maxWidth === undefined
+            ? fillText.call(this, text, x, y)
+            : fillText.call(this, text, x, y, maxWidth);
+        },
+      );
+    });
+    await page.goto("/puffcade/flappy-puff");
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+    await page.evaluate(() => {
+      for (const canvas of document.querySelectorAll("canvas")) {
+        delete canvas.dataset.connectedFillTextCalls;
+      }
+    });
+    await game.getByRole("button", { name: /flap to start/i }).click();
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          let frames = 0;
+          const onFrame = () => {
+            frames += 1;
+            if (frames === 6) {
+              resolve();
+              return;
+            }
+            requestAnimationFrame(onFrame);
+          };
+          requestAnimationFrame(onFrame);
+        }),
+    );
+
+    const calls = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("canvas"))
+        .filter((canvas) => canvas.isConnected)
+        .flatMap((canvas) =>
+          (canvas.dataset.connectedFillTextCalls ?? "")
+            .split("\n")
+            .filter(Boolean),
+        ),
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.every((text) => text === "__/\\__HAM__")).toBe(true);
+  });
+
   test("catalog Link opens the game and native Back returns to the catalog", async ({
     page,
   }) => {

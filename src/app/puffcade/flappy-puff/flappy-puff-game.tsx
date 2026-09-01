@@ -52,11 +52,39 @@ interface PuffSpriteAtlas {
   sprites: Record<SpritePose, HTMLCanvasElement>;
 }
 
+interface GateTextureAtlas {
+  pixelRatio: number;
+  arenaHeight: number;
+  rowTexture: HTMLCanvasElement;
+  capTexture: HTMLCanvasElement;
+  capTextHeight: number;
+}
+
 const FIXED_STEP = 1 / 60;
 const MAX_FRAME_DELTA = 0.1;
 const MAX_CATCH_UP_STEPS = 5;
 const BEST_SCORE_KEY = "ham:flappy-puff:best:v1";
 const FLAP_KEYS = new Set(["Space", "ArrowUp", "KeyW"]);
+
+const GATE_ROW_HEIGHT = 13;
+const GATE_ROW_GLYPHS = ["#", "%", "H", ":"] as const;
+const GATE_ROW_FONT =
+  "700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const GATE_CAP_FONT =
+  "700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+// The cap band spans gate.x-8..gate.x+GATE_WIDTH+8; the label starts at gate.x-2.
+const GATE_CAP_BAND_OFFSET_X = 8;
+const GATE_CAP_TEXT_OFFSET_X = 2;
+
+function phaseRowString(phase: number): string {
+  let line = "";
+  for (let column = 0; column < 8; column += 1) {
+    line += GATE_ROW_GLYPHS[Math.abs(phase + column) % GATE_ROW_GLYPHS.length];
+  }
+  return line;
+}
+
+const GATE_ROW_TEXTURE_TEXT = [0, 1, 2, 3].map(phaseRowString);
 
 function cssColor(style: CSSStyleDeclaration, name: string, fallback: string) {
   return style.getPropertyValue(name).trim() || fallback;
@@ -126,6 +154,58 @@ function buildPuffSpriteAtlas(): PuffSpriteAtlas {
   };
 }
 
+function buildGateTextureAtlas(
+  arenaHeight: number,
+  pixelRatio: number,
+  palette: Palette,
+): GateTextureAtlas | null {
+  const rowTextureContext = document.createElement("canvas").getContext("2d");
+  const capTextureContext = document.createElement("canvas").getContext("2d");
+  if (!rowTextureContext || !capTextureContext) return null;
+
+  rowTextureContext.font = GATE_ROW_FONT;
+  const rowTextWidth = Math.max(
+    ...GATE_ROW_TEXTURE_TEXT.map((text) => rowTextureContext.measureText(text).width),
+  );
+
+  const rowTextureRows = GATE_ROW_GLYPHS.length + Math.ceil(arenaHeight / GATE_ROW_HEIGHT);
+  const rowTexture = rowTextureContext.canvas;
+  rowTexture.width = Math.ceil(rowTextWidth * pixelRatio);
+  rowTexture.height = Math.ceil(rowTextureRows * GATE_ROW_HEIGHT * pixelRatio);
+  rowTextureContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  rowTextureContext.font = GATE_ROW_FONT;
+  rowTextureContext.textBaseline = "top";
+  rowTextureContext.fillStyle = palette.ink;
+  for (let row = 0; row < rowTextureRows; row += 1) {
+    rowTextureContext.fillText(
+      GATE_ROW_TEXTURE_TEXT[row % GATE_ROW_GLYPHS.length],
+      0,
+      row * GATE_ROW_HEIGHT,
+    );
+  }
+
+  const capTexture = capTextureContext.canvas;
+  capTexture.width = Math.ceil((GATE_WIDTH + 16) * pixelRatio);
+  capTexture.height = Math.ceil(GATE_ROW_HEIGHT * pixelRatio);
+  capTextureContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  capTextureContext.font = GATE_CAP_FONT;
+  capTextureContext.textBaseline = "top";
+  capTextureContext.fillStyle = palette.surface;
+  capTextureContext.fillText(
+    "+=====+",
+    GATE_CAP_BAND_OFFSET_X - GATE_CAP_TEXT_OFFSET_X,
+    0,
+  );
+
+  return {
+    pixelRatio,
+    arenaHeight,
+    rowTexture,
+    capTexture,
+    capTextHeight: GATE_ROW_HEIGHT,
+  };
+}
+
 function drawBackground(
   context: CanvasRenderingContext2D,
   state: PuffGameState,
@@ -159,26 +239,32 @@ function drawBackground(
 function drawGateSection(
   context: CanvasRenderingContext2D,
   palette: Palette,
+  gates: GateTextureAtlas,
   x: number,
   top: number,
   bottom: number,
   pattern: number,
 ) {
   if (bottom <= top) return;
-  const glyphs = ["#", "%", "H", ":"];
-  const cellHeight = 13;
-  context.font = "700 12px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  context.textBaseline = "top";
-  context.fillStyle = palette.ink;
-  for (let y = top; y < bottom; y += cellHeight) {
-    const row = Math.floor(y / cellHeight);
-    let line = "";
-    for (let column = 0; column < 8; column += 1) {
-      const index = Math.abs(row + column + pattern) % glyphs.length;
-      line += glyphs[index];
-    }
-    context.fillText(line, x + 5, y);
-  }
+
+  const startPhase = Math.floor(top / GATE_ROW_HEIGHT) + pattern;
+  const phase =
+    ((startPhase % GATE_ROW_GLYPHS.length) + GATE_ROW_GLYPHS.length) %
+    GATE_ROW_GLYPHS.length;
+  const sectionHeight =
+    Math.ceil((bottom - top) / GATE_ROW_HEIGHT) * GATE_ROW_HEIGHT;
+  const ratio = gates.pixelRatio;
+  context.drawImage(
+    gates.rowTexture,
+    0,
+    phase * GATE_ROW_HEIGHT * ratio,
+    gates.rowTexture.width,
+    sectionHeight * ratio,
+    x + 5,
+    top,
+    gates.rowTexture.width / ratio,
+    sectionHeight,
+  );
 
   context.strokeStyle = palette.ink;
   context.lineWidth = 2;
@@ -189,22 +275,40 @@ function drawGate(
   context: CanvasRenderingContext2D,
   state: PuffGameState,
   palette: Palette,
+  gates: GateTextureAtlas,
   gate: PuffGameState["gates"][number],
 ) {
   const gapTop = gate.gapY - gate.gapHeight / 2;
   const gapBottom = gate.gapY + gate.gapHeight / 2;
   const floor = state.height - GROUND_HEIGHT;
-  drawGateSection(context, palette, gate.x, 0, gapTop - 13, gate.pattern);
-  drawGateSection(context, palette, gate.x, gapBottom + 13, floor, gate.pattern + 1);
+  drawGateSection(context, palette, gates, gate.x, 0, gapTop - 13, gate.pattern);
+  drawGateSection(context, palette, gates, gate.x, gapBottom + 13, floor, gate.pattern + 1);
 
   context.fillStyle = palette.red;
   context.fillRect(gate.x - 8, gapTop - 14, GATE_WIDTH + 16, 14);
   context.fillRect(gate.x - 8, gapBottom, GATE_WIDTH + 16, 14);
-  context.fillStyle = palette.surface;
-  context.font = "700 11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  context.textBaseline = "top";
-  context.fillText("+=====+", gate.x - 2, gapTop - 13);
-  context.fillText("+=====+", gate.x - 2, gapBottom + 1);
+  context.drawImage(
+    gates.capTexture,
+    0,
+    0,
+    gates.capTexture.width,
+    gates.capTexture.height,
+    gate.x - GATE_CAP_BAND_OFFSET_X,
+    gapTop - GATE_ROW_HEIGHT,
+    GATE_WIDTH + 16,
+    gates.capTextHeight,
+  );
+  context.drawImage(
+    gates.capTexture,
+    0,
+    0,
+    gates.capTexture.width,
+    gates.capTexture.height,
+    gate.x - GATE_CAP_BAND_OFFSET_X,
+    gapBottom + 1,
+    GATE_WIDTH + 16,
+    gates.capTextHeight,
+  );
 }
 
 function drawGround(
@@ -263,12 +367,13 @@ function drawGame(
   context: CanvasRenderingContext2D,
   state: PuffGameState,
   atlas: PuffSpriteAtlas,
+  gates: GateTextureAtlas,
   time: number,
 ) {
   drawBackground(context, state, atlas.palette);
   for (const gate of state.gates) {
     if (gate.x + GATE_WIDTH + 8 < 0 || gate.x - 8 > state.width) continue;
-    drawGate(context, state, atlas.palette, gate);
+    drawGate(context, state, atlas.palette, gates, gate);
   }
   drawGround(context, state, atlas.palette);
   drawBird(context, state, atlas, time);
@@ -536,6 +641,7 @@ export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
     if (!context) return;
 
     const atlas = buildPuffSpriteAtlas();
+    let gates: GateTextureAtlas | null = null;
     let needsRedraw = true;
     let lastDrawnPhase: GamePhase | null = null;
     const coarsePointer =
@@ -561,6 +667,9 @@ export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
       context.imageSmoothingEnabled = false;
       context.fillStyle = atlas.palette.surface;
       context.fillRect(0, 0, width, height);
+      if (!gates || gates.arenaHeight < height || gates.pixelRatio !== ratio) {
+        gates = buildGateTextureAtlas(height, ratio, atlas.palette) ?? gates;
+      }
       if (gameRef.current) resizePuffGame(gameRef.current, width, height);
       else gameRef.current = createPuffGame(width, height);
       needsRedraw = true;
@@ -608,11 +717,11 @@ export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
         frameIntervalMs: renderProfile.frameIntervalMs,
         phase: currentPhase,
         forceDraw: needsRedraw || phaseChanged,
-        canDraw: Boolean(game && atlas),
+        canDraw: Boolean(game && gates),
       });
       renderAccumulatorMs = renderStep.accumulatorMs;
-      if (game && atlas && renderStep.shouldDraw) {
-        drawGame(context, game, atlas, now);
+      if (game && gates && renderStep.shouldDraw) {
+        drawGame(context, game, atlas, gates, now);
         needsRedraw = false;
         lastDrawnPhase = currentPhase;
       }
