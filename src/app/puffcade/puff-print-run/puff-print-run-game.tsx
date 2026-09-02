@@ -69,6 +69,8 @@ const FRAME_MARGIN = 18;
 const DISPLAY_SYNCED_RENDER_CADENCE: PuffRenderCadence = { kind: "display" };
 const SNAKE_MONO =
   "700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const SNAKE_DISPLAY =
+  '"Ham Display", "Arial Black", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 const STEER_KEYS: Record<string, PuffSnakeDirection> = {
   ArrowUp: "up",
@@ -685,84 +687,78 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
     let lastDrawnPhase: GamePhase | null = null;
 
     const drawBackground = (width: number, height: number) => {
-      context.fillStyle = palette.paper;
+      // Calm press-room wall: a flat paper-tinted slab inside a thin ink
+      // frame, with tiny corner registration ticks as frame hardware.
+      context.fillStyle = palette.muted;
+      context.globalAlpha = 0.3;
       context.fillRect(0, 0, width, height);
-      context.strokeStyle = palette.blue;
-      context.globalAlpha = 0.045;
-      context.lineWidth = 1;
+      context.globalAlpha = 1;
+      context.fillStyle = palette.paper;
+      context.fillRect(6, 6, width - 12, height - 12);
+
+      const bandY = Math.round(height / 2 - 9);
+      context.fillStyle = palette.red;
+      context.globalAlpha = 0.07;
+      context.fillRect(6, bandY, width - 12, 18);
+      context.fillStyle = palette.paper;
+      context.globalAlpha = 0.35;
+      context.fillRect(6, bandY, width - 12, 1);
+      context.fillRect(6, bandY + 17, width - 12, 1);
+      context.globalAlpha = 1;
+
+      context.strokeStyle = palette.ink;
+      context.globalAlpha = 0.35;
+      context.lineWidth = 1.5;
       context.beginPath();
-      for (let y = 48.5; y < height; y += 48) {
-        context.moveTo(0, y);
-        context.lineTo(width, y);
+      for (const [markX, markY] of [
+        [13, 13],
+        [width - 13, 13],
+        [13, height - 13],
+        [width - 13, height - 13],
+      ] as const) {
+        context.moveTo(markX - 4.5, markY);
+        context.lineTo(markX + 4.5, markY);
+        context.moveTo(markX, markY - 4.5);
+        context.lineTo(markX, markY + 4.5);
       }
       context.stroke();
+
+      context.strokeStyle = palette.ink;
+      context.globalAlpha = 0.5;
+      context.lineWidth = 2;
+      context.strokeRect(7.5, 7.5, width - 15, height - 15);
       context.globalAlpha = 1;
     };
 
     const drawSheet = () => {
       const { x, y, width, height, cell } = layout;
-      context.save();
-      context.shadowColor = "rgba(28, 26, 23, 0.28)";
-      context.shadowOffsetX = 3;
-      context.shadowOffsetY = 3;
+      // The offset ink "sill" doubles as the sheet's drop shadow.
+      context.fillStyle = palette.ink;
+      context.fillRect(x + 4, y + 4, width, height);
       context.fillStyle = palette.surface;
       context.fillRect(x, y, width, height);
-      context.restore();
 
-      // Lined stock.
+      // Graphing-notebook stock: one hairline per snake-board cell boundary,
+      // both axes, so the paper grid *is* the play grid.
       context.strokeStyle = palette.blue;
-      context.globalAlpha = 0.05;
+      context.globalAlpha = 0.07;
       context.lineWidth = 1;
       context.beginPath();
-      for (let lineY = y + cell * 2 + 0.5; lineY < y + height; lineY += cell) {
+      for (let lineY = y + cell + 0.5; lineY < y + height; lineY += cell) {
         context.moveTo(x, lineY);
         context.lineTo(x + width, lineY);
       }
+      for (let lineX = x + cell + 0.5; lineX < x + width; lineX += cell) {
+        context.moveTo(lineX, y);
+        context.lineTo(lineX, y + height);
+      }
       context.stroke();
       context.globalAlpha = 1;
 
-      // Tractor-feed holes along both edges.
-      const holeRadius = Math.max(1.8, cell * 0.13);
-      for (let row = 0; row < SNAKE_GRID_ROWS; row += 1) {
-        const cy = y + (row + 0.5) * cell;
-        for (const cx of [x - 8.5, x + width + 8.5]) {
-          context.beginPath();
-          context.arc(cx + 1, cy + 1, holeRadius, 0, Math.PI * 2);
-          context.fillStyle = "rgba(28, 26, 23, 0.2)";
-          context.fill();
-          context.beginPath();
-          context.arc(cx, cy, holeRadius, 0, Math.PI * 2);
-          context.fillStyle = palette.paper;
-          context.fill();
-          context.strokeStyle = palette.ink;
-          context.globalAlpha = 0.45;
-          context.lineWidth = 1;
-          context.stroke();
-          context.globalAlpha = 1;
-        }
-      }
-
-      // Sheet outline and a red registration margin rule.
+      // Sheet outline.
       context.strokeStyle = palette.ink;
       context.lineWidth = 2;
       context.strokeRect(x, y, width, height);
-      context.strokeStyle = palette.red;
-      context.globalAlpha = 0.6;
-      context.lineWidth = 1;
-      context.beginPath();
-      context.moveTo(x + cell + 0.5, y + 3);
-      context.lineTo(x + cell + 0.5, y + height - 3);
-      context.stroke();
-      // Registration cross, top right corner.
-      const rx = x + width - cell;
-      const ry = y + cell * 0.5;
-      context.beginPath();
-      context.moveTo(rx - 4, ry);
-      context.lineTo(rx + 4, ry);
-      context.moveTo(rx, ry - 4);
-      context.lineTo(rx, ry + 4);
-      context.stroke();
-      context.globalAlpha = 1;
     };
 
     const drawBodySegment = (
@@ -772,36 +768,45 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       isTail: boolean,
     ) => {
       const { cell, x: bx, y: by } = layout;
-      const left = bx + x * cell + 1.5;
-      const top = by + y * cell + 1.5;
-      const size = cell - 3;
+      const left = bx + x * cell + 1;
+      const top = by + y * cell + 1;
+      const size = cell - 2;
       const noise = cellNoise(x, y);
-      const tilt = (noise - 0.5) * 0.08;
+      const tilt = (noise - 0.5) * 0.09;
 
       context.save();
       context.translate(left + size / 2, top + size / 2);
       context.rotate(tilt);
+      // Each segment is an inked stamp; the offset ink offset sells letterpress.
+      const strength = Math.max(0.5, 1 - index * 0.03);
+      context.globalAlpha = strength * 0.9;
+      context.fillStyle = palette.ink;
+      context.fillRect(-size / 2 + 1, -size / 2 + 1, size, size);
+      context.globalAlpha = strength;
       context.fillStyle = palette.paper;
-      context.strokeStyle = palette.ink;
-      context.lineWidth = 1.5;
-      context.globalAlpha = Math.max(0.4, 0.95 - index * 0.04);
       context.fillRect(-size / 2, -size / 2, size, size);
+      context.strokeStyle = palette.ink;
+      context.lineWidth = 1.6;
       context.strokeRect(-size / 2, -size / 2, size, size);
       // Perforation dashes across the segment, like the fold line of fanfold.
+      context.globalAlpha = strength * 0.5;
+      context.lineWidth = 1;
       context.setLineDash([3, 3]);
-      context.globalAlpha *= 0.55;
       context.beginPath();
-      context.moveTo(-size / 2 + 2, 0);
-      context.lineTo(size / 2 - 2, 0);
+      context.moveTo(-size / 2 + 2.5, 0);
+      context.lineTo(size / 2 - 2.5, 0);
       context.stroke();
       context.setLineDash([]);
       if (isTail) {
         // The loose end of the trail is torn red rather than inked.
-        context.globalAlpha = 0.85;
+        context.globalAlpha = 0.9;
         context.strokeStyle = palette.red;
+        context.lineWidth = 1.6;
         context.beginPath();
-        context.moveTo(-size / 2 + 3, -size / 2 + 3);
-        context.lineTo(size / 2 - 3, size / 2 - 3);
+        context.moveTo(-size / 2 + 3.5, -size / 2 + 3.5);
+        context.lineTo(size / 2 - 3.5, size / 2 - 3.5);
+        context.moveTo(size / 2 - 3.5, -size / 2 + 3.5);
+        context.lineTo(-size / 2 + 3.5, size / 2 - 3.5);
         context.stroke();
       }
       context.restore();
@@ -818,18 +823,37 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       const top = by + y * cell - 1 + jitter;
       const size = cell + 2;
 
-      // Misregistration ghost first, then the tile itself.
-      context.fillStyle = palette.red;
-      context.globalAlpha = 0.4;
-      context.fillRect(left + 1.5, top + 1.5, size, size);
+      // Target corner brackets in red, then the proof chip itself.
+      context.strokeStyle = palette.red;
+      context.globalAlpha = 0.55;
+      context.lineWidth = 1.25;
+      context.beginPath();
+      const tick = Math.max(3, cell * 0.24);
+      for (const [cornerX, cornerY, dirX, dirY] of [
+        [left - 3, top - 3, 1, 1],
+        [left + size + 3, top - 3, -1, 1],
+        [left - 3, top + size + 3, 1, -1],
+        [left + size + 3, top + size + 3, -1, -1],
+      ] as const) {
+        context.moveTo(cornerX + tick * dirX, cornerY);
+        context.lineTo(cornerX, cornerY);
+        context.lineTo(cornerX, cornerY + tick * dirY);
+      }
+      context.stroke();
       context.globalAlpha = 1;
-      context.fillStyle = palette.paper;
+
+      // Misregistration ghost first, then the chip itself.
+      context.fillStyle = palette.red;
+      context.globalAlpha = 0.3;
+      context.fillRect(left + 2, top + 2, size, size);
+      context.globalAlpha = 1;
+      context.fillStyle = palette.surface;
       context.fillRect(left, top, size, size);
       context.strokeStyle = palette.ink;
       context.lineWidth = 2;
       context.strokeRect(left, top, size, size);
-      context.fillStyle = palette.blue;
-      context.font = `800 ${Math.max(11, Math.floor(cell * 0.62))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      context.fillStyle = palette.red;
+      context.font = `800 ${Math.max(12, Math.floor(cell * 0.6))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
       context.textAlign = "center";
       context.textBaseline = "middle";
       context.fillText(letter, left + size / 2, top + size / 2 + 1);
@@ -869,17 +893,80 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       context.drawImage(headSprite, -size / 2, -size / 2, size, size);
       context.restore();
 
+      if (game.status === "ready") {
+        const headX = bx + (head.x + 0.5) * cell;
+        const headY = by + (head.y + 0.5) * cell + idleBob;
+        const arrowX = headX + dx * (cell * 0.95 + 5);
+        const arrowY = headY + dy * (cell * 0.95 + 5);
+        context.save();
+        context.translate(arrowX, arrowY);
+        context.rotate(angle);
+        context.fillStyle = palette.red;
+        context.globalAlpha = 0.9;
+        context.beginPath();
+        context.moveTo(4.5, 0);
+        context.lineTo(-2.75, -3.75);
+        context.lineTo(-2.75, 3.75);
+        context.closePath();
+        context.fill();
+        context.restore();
+        context.globalAlpha = 1;
+      }
+
       if (game.status === "dead") {
         context.fillStyle = palette.red;
-        context.font = SNAKE_MONO;
+        context.font = `900 14px ${SNAKE_DISPLAY}`;
         context.textAlign = "center";
+        context.textBaseline = "alphabetic";
         context.fillText(
           "* PAPER JAM *",
           bx + (head.x + 0.5) * cell,
-          by + head.y * cell - 7,
+          by + head.y * cell - 8,
         );
         context.textAlign = "start";
       }
+    };
+
+    const drawReadyCue = () => {
+      const game = gameRef.current;
+      if (!game || game.status !== "ready" || phaseRef.current === "paused")
+        return;
+      const { x, y, cell } = layout;
+      const head = game.snake[0];
+      if (!head) return;
+      const lineY = y + (head.y + 0.5) * cell;
+      const fromX = x + cell * 1.5;
+      const toX = x + (head.x - 1) * cell;
+      const pulse = reducedMotion ? 1 : 0.72 + 0.28 * Math.sin(performance.now() / 260);
+
+      // A dashed feed path leading into the print head.
+      if (toX > fromX + 4) {
+        context.save();
+        context.strokeStyle = palette.ink;
+        context.globalAlpha = 0.22;
+        context.lineWidth = 1;
+        context.setLineDash([3, 4]);
+        context.beginPath();
+        context.moveTo(fromX, lineY);
+        context.lineTo(toX, lineY);
+        context.stroke();
+        context.restore();
+        context.globalAlpha = 1;
+      }
+
+      // Static cue so a frozen first frame still reads "the run starts here".
+      context.font = SNAKE_MONO;
+      context.textAlign = "right";
+      context.textBaseline = "middle";
+      context.fillStyle = palette.muted;
+      context.globalAlpha = 0.85;
+      context.fillText("FEED STARTS HERE", toX - 5, lineY);
+      context.fillStyle = palette.red;
+      context.globalAlpha = pulse;
+      context.fillText(">", toX + 7, lineY);
+      context.textAlign = "start";
+      context.textBaseline = "alphabetic";
+      context.globalAlpha = 1;
     };
 
     const drawProofFlash = (now: number) => {
@@ -914,6 +1001,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
         }
         drawPickup(now / 1000);
         drawHead();
+        drawReadyCue();
       }
       drawProofFlash(now);
     };
@@ -1021,6 +1109,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       : `Word to spell: ${objective.word}`;
   const ticksPerSecond = getPuffSnakeTicksPerSecond(objective).toFixed(1);
   const wordKey = `${objectiveText}-${proofSignal}`;
+  const scoreMilestone = Math.floor(score / 5);
 
   return (
     <main
@@ -1036,16 +1125,19 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
             <h1 id="puff-print-run-title">PUFF PRINT RUN.EXE</h1>
           </div>
           <div className={styles.stats} aria-label="Current game statistics">
-            <p>
-              Score <strong>{String(score).padStart(2, "0")}</strong>
+            <p className={styles.statBlock}>
+              Score{" "}
+              <strong key={scoreMilestone}>
+                {String(score).padStart(2, "0")}
+              </strong>
             </p>
-            <p>
+            <p className={styles.statBlock}>
               Best <strong>{String(bestScore).padStart(2, "0")}</strong>
             </p>
-            <p>
+            <p className={styles.statBlock}>
               Speed <strong>{ticksPerSecond}</strong> TPS
             </p>
-            <p className={styles.wordStrip} aria-label={objectiveLabel}>
+            <div className={styles.wordStrip} aria-label={objectiveLabel}>
               <span className="sr-only">
                 {objective.kind === "endless" ? "Mode: " : "Word: "}
               </span>
@@ -1058,8 +1150,8 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
                   {letter}
                 </span>
               ))}
-            </p>
-            <p className={styles.memberState}>
+            </div>
+            <p className={styles.memberState} data-saving={leaderboard.status === "saving" || undefined}>
               {leaderboard.authenticated
                 ? leaderboard.status === "saving"
                   ? "Printing score…"
@@ -1083,11 +1175,16 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
                 <div className={styles.startCard}>
                   <p className={styles.eyebrow}>CONTINUOUS-FORM CHECK</p>
                   <h3>Keep the feed moving.</h3>
-                  <p>
-                    Collect each letter in order. Every finished word speeds up
-                    the press and shortens your trail. At maximum speed, Endless
-                    Feed begins: random letters make Puff longer. Hit the edge or
-                    your own paper and it is a paper jam.
+                  <ul className={styles.ruleList}>
+                    <li>Collect each letter in order to print the word.</li>
+                    <li>Finished words speed up the press and trim your trail.</li>
+                    <li>
+                      At top speed, Endless Feed begins: random letters make
+                      Puff longer.
+                    </li>
+                  </ul>
+                  <p className={styles.ruleCaution}>
+                    Hit the edge or your own paper and it is a paper jam.
                   </p>
                   <button
                     type="button"
@@ -1139,6 +1236,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
                       <p className={styles.newBestStamp}>New best</p>
                     )}
                     <p className={styles.scoreLabel}>points pressed</p>
+                    <p className={styles.tearLine} aria-hidden="true" />
                     <p className={styles.bestLine}>
                       Best print: <strong>{bestScore}</strong>
                     </p>
@@ -1178,6 +1276,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
             data-puff-print-run-controls="true"
             role="group"
             aria-label="Direction controls"
+            data-active={phase === "playing" || phase === "ready" || undefined}
           >
             <div className={styles.controlGrid}>
               <button
@@ -1223,12 +1322,16 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
         <footer className={styles.footer}>
           <p>
             Steer: <kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd>{" "}
-            <kbd>WASD</kbd> swipe
+            <kbd>WASD</kbd> or swipe
             <span aria-hidden="true">{" // "}</span>
             Pause: <kbd>ESC</kbd>
           </p>
-          <button type="button" onClick={exitGame}>
-            [X] EXIT TRANSMISSION
+          <button
+            type="button"
+            onClick={exitGame}
+            className={styles.exitButton}
+          >
+            [✕] EXIT TRANSMISSION
           </button>
         </footer>
 
