@@ -8,15 +8,18 @@ import {
   SNAKE_GRID_COLS,
   SNAKE_GRID_ROWS,
   createPuffSnake,
+  getPuffSnakeTicksPerSecond,
   startPuffSnake,
   stepPuffSnake,
   turnPuffSnake,
   type PuffSnakeDirection,
+  type PuffSnakeObjective,
   type PuffSnakeState,
 } from "@/lib/puff/snake";
 import {
   advancePuffRenderClock,
   getPuffRenderProfile,
+  type PuffRenderCadence,
   type PuffRenderPhase,
 } from "@/lib/puff/performance";
 import { renderPuff } from "@/lib/puff/render";
@@ -63,7 +66,7 @@ interface BoardLayout {
 
 const BEST_SCORE_KEY = "ham:puff-print-run:best:v1";
 const FRAME_MARGIN = 18;
-const MAX_FRAME_DELTA = 0.1;
+const DISPLAY_SYNCED_RENDER_CADENCE: PuffRenderCadence = { kind: "display" };
 const SNAKE_MONO =
   "700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
@@ -272,8 +275,12 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
   const proofFlashRef = useRef(0);
   const [phase, setPhaseState] = useState<GamePhase>("ready");
   const [score, setScore] = useState(0);
-  const [word, setWord] = useState("INK");
-  const [wordProgress, setWordProgress] = useState(0);
+  const [objective, setObjective] = useState<PuffSnakeObjective>({
+    kind: "word",
+    word: "INK",
+    progress: 0,
+    completedWords: 0,
+  });
   const [proofSignal, setProofSignal] = useState("");
   const [localBest, setLocalBest] = useState(0);
   const [newBest, setNewBest] = useState(false);
@@ -496,12 +503,13 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       proofFlashRef.current = 0;
       setScore(0);
       setNewBest(false);
-      setWord(game.word);
-      setWordProgress(0);
+      setObjective(game.objective);
       if (startImmediately) {
         startPuffSnake(game);
         setPhase("playing");
-        setAnnouncement(`Print run started. Spell ${game.word}.`);
+        if (game.objective.kind === "word") {
+          setAnnouncement(`Print run started. Spell ${game.objective.word}.`);
+        }
       } else {
         setPhase("ready");
         setAnnouncement("Press Space, Enter, tap, or a direction to start.");
@@ -519,7 +527,9 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
     const game = gameRef.current;
     if (game && startPuffSnake(game)) {
       setPhase("playing");
-      setAnnouncement(`Print run started. Spell ${game.word}.`);
+      if (game.objective.kind === "word") {
+        setAnnouncement(`Print run started. Spell ${game.objective.word}.`);
+      }
     }
   }, [createFreshRun, setPhase]);
 
@@ -925,8 +935,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       if (!gameRef.current) {
         const fresh = createPuffSnake();
         gameRef.current = fresh;
-        setWord(fresh.word);
-        setWordProgress(fresh.wordProgress);
+        setObjective(fresh.objective);
       }
       needsRedraw = true;
     };
@@ -937,34 +946,39 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
     let frameId = 0;
     let previous = performance.now();
     let renderAccumulatorMs = 0;
-    const renderProfile = getPuffRenderProfile({
-      devicePixelRatio: window.devicePixelRatio || 1,
-      coarsePointer,
-    });
-
     const frame = (now: number) => {
       const game = gameRef.current;
       const currentPhase = phaseRef.current;
       const elapsedMs = Math.max(0, now - previous);
-      const delta = Math.min(MAX_FRAME_DELTA, elapsedMs / 1_000);
+      const delta = elapsedMs / 1_000;
       previous = now;
 
       if (game && currentPhase === "playing") {
+        const collectedLetter = game.pickup.letter;
         const events = stepPuffSnake(game, delta);
         if (events & PUFF_SNAKE_EVENT.ATE) {
           setScore(game.score);
-          setWordProgress(game.wordProgress);
-          const collected = game.word[game.wordProgress - 1];
-          if (collected) {
-            setAnnouncement(`${collected} collected.`);
+          setObjective(game.objective);
+          if (!(events & PUFF_SNAKE_EVENT.PROOF)) {
+            setAnnouncement(
+              game.objective.kind === "endless"
+                ? `${collectedLetter} collected. Puff grew longer.`
+                : `${collectedLetter} collected.`,
+            );
           }
         }
         if (events & PUFF_SNAKE_EVENT.PROOF) {
-          setWord(game.word);
-          setWordProgress(game.wordProgress);
-          setProofSignal(game.word);
+          const signal =
+            game.objective.kind === "endless"
+              ? "ENDLESS"
+              : game.objective.word;
+          setProofSignal(signal);
           proofFlashRef.current = now;
-          setAnnouncement(`Proof pulled. Next word is ${game.word}.`);
+          setAnnouncement(
+            game.objective.kind === "endless"
+              ? "Maximum press speed reached. Endless feed started."
+              : `Proof pulled. Next word is ${game.objective.word}.`,
+          );
         }
         if (events & PUFF_SNAKE_EVENT.CRASHED) {
           finishRunRef.current(game.score);
@@ -975,7 +989,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       const renderStep = advancePuffRenderClock({
         accumulatorMs: renderAccumulatorMs,
         elapsedMs,
-        frameIntervalMs: renderProfile.frameIntervalMs,
+        cadence: DISPLAY_SYNCED_RENDER_CADENCE,
         phase: currentPhase,
         forceDraw: needsRedraw || phaseChanged || proofFlashRef.current > 0,
         canDraw: Boolean(game),
@@ -997,7 +1011,16 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
 
   const memberBest = leaderboard.authenticated ? leaderboard.personalBest : 0;
   const bestScore = Math.max(localBest, memberBest);
-  const wordKey = `${word}-${proofSignal}`;
+  const objectiveText =
+    objective.kind === "endless" ? "ENDLESS" : objective.word;
+  const objectiveProgress =
+    objective.kind === "endless" ? objectiveText.length : objective.progress;
+  const objectiveLabel =
+    objective.kind === "endless"
+      ? "Endless feed mode"
+      : `Word to spell: ${objective.word}`;
+  const ticksPerSecond = getPuffSnakeTicksPerSecond(objective).toFixed(1);
+  const wordKey = `${objectiveText}-${proofSignal}`;
 
   return (
     <main
@@ -1019,12 +1042,17 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
             <p>
               Best <strong>{String(bestScore).padStart(2, "0")}</strong>
             </p>
-            <p className={styles.wordStrip} aria-label={`Word to spell: ${word}`}>
-              <span className="sr-only">Word: </span>
-              {word.split("").map((letter, index) => (
+            <p>
+              Speed <strong>{ticksPerSecond}</strong> TPS
+            </p>
+            <p className={styles.wordStrip} aria-label={objectiveLabel}>
+              <span className="sr-only">
+                {objective.kind === "endless" ? "Mode: " : "Word: "}
+              </span>
+              {objectiveText.split("").map((letter, index) => (
                 <span
                   key={`${wordKey}-${index}`}
-                  data-collected={index < wordProgress || undefined}
+                  data-collected={index < objectiveProgress || undefined}
                   className={styles.wordLetter}
                 >
                   {letter}
@@ -1047,7 +1075,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
               ref={canvasRef}
               className={styles.canvas}
               data-puff-print-run-canvas="true"
-              aria-label="A paper grid word game. Steer Puff to collect each letter in order; your trail is a wall."
+              aria-label="A paper grid game. Steer Puff to collect letters; your trail is a wall."
             />
 
             {phase === "ready" && (
@@ -1056,9 +1084,10 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
                   <p className={styles.eyebrow}>CONTINUOUS-FORM CHECK</p>
                   <h3>Keep the feed moving.</h3>
                   <p>
-                    Collect each letter in order. Finish the word to pull the
-                    proof and shorten your trail. Hit the edge or your own paper
-                    and it is a paper jam.
+                    Collect each letter in order. Every finished word speeds up
+                    the press and shortens your trail. At maximum speed, Endless
+                    Feed begins: random letters make Puff longer. Hit the edge or
+                    your own paper and it is a paper jam.
                   </p>
                   <button
                     type="button"
@@ -1205,8 +1234,9 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
 
         <p id="puff-print-run-description" className="sr-only">
           Steer Puff around the paper sheet. Collect each letter in order to
-          spell the word. Finishing the word pulls the proof and shortens your
-          trail. Press Escape to pause.
+          spell the word. Finishing a word speeds up the press and shortens your
+          trail. At maximum speed, collect random letters in endless mode and
+          keep growing. Press Escape to pause.
         </p>
         <p className="sr-only" aria-live="polite">
           {announcement}

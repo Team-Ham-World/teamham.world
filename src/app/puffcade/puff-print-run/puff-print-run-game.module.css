@@ -144,15 +144,6 @@
   background: var(--color-surface);
   border: 3px solid var(--color-ink);
   box-shadow: 7px 7px 0 var(--color-ink);
-  /*
-   * The board itself is a fixed 22:16 sheet plus its tractor-feed frame, so
-   * the arena prefers that shape whenever the grid can honour it. On desktop
-   * the row track (minmax(0, 1fr)) is shorter than this preference and wins,
-   * which keeps the desktop framing exactly as it was; when the stage stacks
-   * into a column on narrow screens this instead sets the arena height from
-   * its real width — the column layout never has to guess.
-   */
-  aspect-ratio: 408 / 288;
 }
 
 .arena::after {
@@ -609,6 +600,13 @@
     grid-template-columns: 1fr;
     grid-template-rows: auto auto;
     align-content: start;
+  }
+
+  /* Once the stage stacks, derive the arena height from its real width. The
+     desktop grid instead lets its bounded 1fr row determine arena height so
+     a wide board cannot grow underneath the footer. */
+  .arena {
+    aspect-ratio: 408 / 288;
   }
 
   .controls {

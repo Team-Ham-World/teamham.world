@@ -3,19 +3,56 @@ import { describe, expect, it } from "vitest";
 import {
   PUFF_SNAKE_EVENT,
   PUFF_SNAKE_WORDS,
+  PUFF_SNAKE_WORDS_TO_ENDLESS,
   SNAKE_GRID_COLS,
   SNAKE_GRID_ROWS,
   createPuffSnake,
+  getPuffSnakeTicksPerSecond,
   startPuffSnake,
   stepPuffSnake,
   turnPuffSnake,
+  type PuffSnakeObjective,
 } from "@/lib/puff/snake";
 
 type SnakeState = ReturnType<typeof createPuffSnake>;
+type WordObjective = Extract<PuffSnakeObjective, { kind: "word" }>;
+
+function wordObjective(state: SnakeState): WordObjective {
+  if (state.objective.kind !== "word") {
+    throw new Error("Expected a word-feed objective.");
+  }
+  return state.objective;
+}
 
 function advanceOneTick(state: SnakeState): number {
-  state.tickAccumulator = state.tickInterval;
-  return stepPuffSnake(state, 0.001);
+  return stepPuffSnake(
+    state,
+    1 / getPuffSnakeTicksPerSecond(state.objective),
+  );
+}
+
+function completeCurrentWord(state: SnakeState): number {
+  const objective = wordObjective(state);
+  state.direction = "right";
+  state.pendingDirection = "right";
+  state.snake = [
+    { x: 10, y: 8 },
+    { x: 9, y: 8 },
+    { x: 8, y: 8 },
+    { x: 7, y: 8 },
+    { x: 6, y: 8 },
+    { x: 5, y: 8 },
+  ];
+  state.objective = {
+    ...objective,
+    progress: objective.word.length - 1,
+  };
+  state.pickup = {
+    x: 11,
+    y: 8,
+    letter: objective.word.charAt(objective.word.length - 1),
+  };
+  return advanceOneTick(state);
 }
 
 describe("Puff Print Run engine", () => {
@@ -29,9 +66,12 @@ describe("Puff Print Run engine", () => {
     expect(first.snake).toHaveLength(4);
     expect(first.direction).toBe("right");
     expect(first.pendingDirection).toBe("right");
-    expect(first.wordProgress).toBe(0);
-    expect(PUFF_SNAKE_WORDS).toContain(first.word);
-    expect(first.pickup.letter).toBe(first.word.charAt(0));
+    const objective = wordObjective(first);
+    expect(objective.progress).toBe(0);
+    expect(objective.completedWords).toBe(0);
+    expect(PUFF_SNAKE_WORDS).toContain(objective.word);
+    expect(first.pickup.letter).toBe(objective.word.charAt(0));
+    expect(getPuffSnakeTicksPerSecond(first.objective)).toBeCloseTo(7.1, 1);
     expect(first.pickup.x).toBeGreaterThanOrEqual(0);
     expect(first.pickup.x).toBeLessThan(SNAKE_GRID_COLS);
     expect(first.pickup.y).toBeGreaterThanOrEqual(0);
@@ -89,10 +129,11 @@ describe("Puff Print Run engine", () => {
     const state = createPuffSnake(7);
     startPuffSnake(state);
     const head = state.snake[0];
+    const objective = wordObjective(state);
     state.pickup = {
       x: head.x + 1,
       y: head.y,
-      letter: state.word.charAt(0),
+      letter: objective.word.charAt(0),
     };
 
     const events = advanceOneTick(state);
@@ -101,17 +142,20 @@ describe("Puff Print Run engine", () => {
     expect(events & PUFF_SNAKE_EVENT.PROOF).toBeFalsy();
     expect(state.score).toBe(10);
     expect(state.snake).toHaveLength(5);
-    expect(state.wordProgress).toBe(1);
-    expect(state.pickup.letter).toBe(state.word.charAt(1));
-    expect(state.tickInterval).toBeLessThan(0.14);
-    expect(state.tickInterval).toBeGreaterThanOrEqual(0.08);
+    const nextObjective = wordObjective(state);
+    expect(nextObjective.progress).toBe(1);
+    expect(state.pickup.letter).toBe(nextObjective.word.charAt(1));
   });
 
   it("emits proof, awards the bonus, trims word growth, and changes word", () => {
     const state = createPuffSnake(99);
     startPuffSnake(state);
-    state.word = "INK";
-    state.wordProgress = 2;
+    state.objective = {
+      kind: "word",
+      word: "INK",
+      progress: 2,
+      completedWords: 0,
+    };
     state.score = 20;
     state.snake = [
       { x: 10, y: 8 },
@@ -129,10 +173,13 @@ describe("Puff Print Run engine", () => {
     expect(events & PUFF_SNAKE_EVENT.PROOF).toBeTruthy();
     expect(state.score).toBe(45);
     expect(state.snake).toHaveLength(4);
-    expect(state.word).not.toBe("INK");
-    expect(PUFF_SNAKE_WORDS).toContain(state.word);
-    expect(state.wordProgress).toBe(0);
-    expect(state.pickup.letter).toBe(state.word.charAt(0));
+    const objective = wordObjective(state);
+    expect(objective.word).not.toBe("INK");
+    expect(PUFF_SNAKE_WORDS).toContain(objective.word);
+    expect(objective.progress).toBe(0);
+    expect(objective.completedWords).toBe(1);
+    expect(state.pickup.letter).toBe(objective.word.charAt(0));
+    expect(getPuffSnakeTicksPerSecond(state.objective)).toBeCloseTo(7.7, 1);
     expect(state.snake).not.toContainEqual({
       x: state.pickup.x,
       y: state.pickup.y,
@@ -142,8 +189,12 @@ describe("Puff Print Run engine", () => {
   it("chooses the same proof word and pickup from the same state", () => {
     const first = createPuffSnake(456);
     startPuffSnake(first);
-    first.word = "HAM";
-    first.wordProgress = 2;
+    first.objective = {
+      kind: "word",
+      word: "HAM",
+      progress: 2,
+      completedWords: 0,
+    };
     first.snake = [
       { x: 10, y: 8 },
       { x: 9, y: 8 },
@@ -218,20 +269,50 @@ describe("Puff Print Run engine", () => {
     ]);
   });
 
-  it("uses a clamped fixed timestep", () => {
+  it("accelerates only after completed words and enters endless at 12.5 TPS", () => {
+    const state = createPuffSnake();
+    startPuffSnake(state);
+    const expectedRates = [7.7, 8.3, 9.1, 10, 11.1, 12.5];
+
+    for (let index = 0; index < PUFF_SNAKE_WORDS_TO_ENDLESS; index += 1) {
+      expect(completeCurrentWord(state) & PUFF_SNAKE_EVENT.PROOF).toBeTruthy();
+      expect(getPuffSnakeTicksPerSecond(state.objective)).toBeCloseTo(
+        expectedRates[index],
+        1,
+      );
+    }
+
+    expect(state.objective).toEqual({ kind: "endless" });
+    expect(state.pickup.letter).toMatch(/^[A-Z]$/);
+  });
+
+  it("keeps every random-letter segment in endless mode", () => {
+    const state = createPuffSnake();
+    startPuffSnake(state);
+    for (let index = 0; index < PUFF_SNAKE_WORDS_TO_ENDLESS; index += 1) {
+      completeCurrentWord(state);
+    }
+    const head = state.snake[0];
+    const length = state.snake.length;
+    state.pickup = { x: head.x + 1, y: head.y, letter: "Q" };
+
+    const events = advanceOneTick(state);
+
+    expect(events).toBe(PUFF_SNAKE_EVENT.ATE);
+    expect(state.objective).toEqual({ kind: "endless" });
+    expect(state.snake).toHaveLength(length + 1);
+    expect(state.pickup.letter).toMatch(/^[A-Z]$/);
+  });
+
+  it("caps a stalled frame at five catch-up ticks", () => {
     const state = createPuffSnake();
     startPuffSnake(state);
     state.pickup = { x: 0, y: 0, letter: state.pickup.letter };
     const initialHead = structuredClone(state.snake[0]);
 
     stepPuffSnake(state, 10);
-    expect(state.snake[0]).toEqual(initialHead);
-    expect(state.tickAccumulator).toBeCloseTo(0.05);
-    stepPuffSnake(state, 0.05);
-    expect(state.snake[0]).toEqual(initialHead);
-    stepPuffSnake(state, 0.05);
-    expect(state.snake[0]).toEqual({ x: initialHead.x + 1, y: initialHead.y });
-    expect(state.tickAccumulator).toBeCloseTo(0.01);
+    expect(state.snake[0]).toEqual({ x: initialHead.x + 5, y: initialHead.y });
+    expect(state.tickAccumulator).toBeCloseTo(0);
   });
 
   it("ignores non-positive and non-finite deltas", () => {

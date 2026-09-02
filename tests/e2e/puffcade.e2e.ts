@@ -407,6 +407,8 @@ test.describe("Puff Print Run", () => {
       game.getByRole("heading", { level: 1, name: "PUFF PRINT RUN.EXE" }),
     ).toBeVisible();
     await expect(game.locator("[data-puff-print-run-canvas]")).toBeVisible();
+    await expect(game.getByText(/speed\s*7\.1\s*tps/i)).toBeVisible();
+    await expect(game.getByText(/endless feed begins/i)).toBeVisible();
     await expect(
       game.getByRole("button", { name: /start the run/i }),
     ).toBeVisible();
@@ -420,6 +422,54 @@ test.describe("Puff Print Run", () => {
     await expect(
       game.getByRole("button", { name: /start the run/i }),
     ).toHaveCount(0);
+  });
+
+  test("keeps the full game shell inside a desktop viewport", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/puffcade/puff-print-run");
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+    await game.evaluate((element) =>
+      Promise.all(element.getAnimations().map((animation) => animation.finished)),
+    );
+
+    const bounds = await game.evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      const canvas = element.querySelector("[data-puff-print-run-canvas]");
+      const footer = element.querySelector("footer");
+
+      if (!canvas || !footer) {
+        throw new Error("The Print Run shell is missing its arena or footer.");
+      }
+
+      const canvasRect = canvas.getBoundingClientRect();
+      const footerRect = footer.getBoundingClientRect();
+
+      return {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        documentWidth: document.documentElement.scrollWidth,
+        documentHeight: document.documentElement.scrollHeight,
+        canvasBottom: canvasRect.bottom,
+        footerTop: footerRect.top,
+      };
+    });
+
+    expect(bounds.top).toBeGreaterThanOrEqual(0);
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(bounds.viewportWidth);
+    expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight);
+    expect(bounds.documentWidth).toBeLessThanOrEqual(bounds.viewportWidth);
+    expect(bounds.documentHeight).toBeLessThanOrEqual(bounds.viewportHeight);
+    expect(bounds.canvasBottom).toBeLessThanOrEqual(bounds.footerTop);
+    await expect(
+      game.getByRole("button", { name: /exit transmission/i }),
+    ).toBeInViewport();
   });
 
   test("Escape pauses while playing and exits from paused", async ({

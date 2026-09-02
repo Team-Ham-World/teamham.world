@@ -33,6 +33,15 @@ export interface PuffSnakePickup extends PuffSnakeCell {
   letter: string;
 }
 
+export type PuffSnakeObjective =
+  | {
+      kind: "word";
+      word: string;
+      progress: number;
+      completedWords: number;
+    }
+  | { kind: "endless" };
+
 export interface PuffSnakeState {
   status: PuffSnakeStatus;
   score: number;
@@ -40,18 +49,34 @@ export interface PuffSnakeState {
   direction: PuffSnakeDirection;
   pendingDirection: PuffSnakeDirection;
   pickup: PuffSnakePickup;
-  word: string;
-  wordProgress: number;
-  tickInterval: number;
+  objective: PuffSnakeObjective;
   tickAccumulator: number;
   rng: number;
 }
 
+export const PUFF_SNAKE_WORDS_TO_ENDLESS = 6;
+
 const STARTING_LENGTH = 4;
-const BASE_TICK_INTERVAL = 0.14;
-const MIN_TICK_INTERVAL = 0.08;
-const SPEEDUP_PER_POINT = 0.0004;
-const MAX_FRAME_DELTA = 0.05;
+const START_TICK_INTERVAL_SECONDS = 0.14;
+const ENDLESS_TICK_INTERVAL_SECONDS = 0.08;
+const TICK_INTERVAL_DROP_PER_WORD_SECONDS = 0.01;
+const MAX_CATCH_UP_TICKS = 5;
+const ENDLESS_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+function tickIntervalForObjective(objective: PuffSnakeObjective): number {
+  if (objective.kind === "endless") return ENDLESS_TICK_INTERVAL_SECONDS;
+  return Math.max(
+    ENDLESS_TICK_INTERVAL_SECONDS,
+    START_TICK_INTERVAL_SECONDS -
+      objective.completedWords * TICK_INTERVAL_DROP_PER_WORD_SECONDS,
+  );
+}
+
+export function getPuffSnakeTicksPerSecond(
+  objective: PuffSnakeObjective,
+): number {
+  return 1 / tickIntervalForObjective(objective);
+}
 
 function nextRandom(state: PuffSnakeState): number {
   let value = state.rng || 0x6d2b79f5;
@@ -60,13 +85,6 @@ function nextRandom(state: PuffSnakeState): number {
   value ^= value << 5;
   state.rng = value >>> 0;
   return state.rng / 0x1_0000_0000;
-}
-
-function tickIntervalForScore(score: number): number {
-  return Math.max(
-    MIN_TICK_INTERVAL,
-    BASE_TICK_INTERVAL - score * SPEEDUP_PER_POINT,
-  );
 }
 
 function cellIsOnSnake(state: PuffSnakeState, x: number, y: number): boolean {
@@ -94,10 +112,10 @@ function chooseInitialWord(state: PuffSnakeState): string {
   return PUFF_SNAKE_WORDS[index];
 }
 
-function chooseNextWord(state: PuffSnakeState): string {
+function chooseNextWord(state: PuffSnakeState, currentWord: string): string {
   let currentIndex = 0;
   for (let index = 0; index < PUFF_SNAKE_WORDS.length; index++) {
-    if (PUFF_SNAKE_WORDS[index] === state.word) {
+    if (PUFF_SNAKE_WORDS[index] === currentWord) {
       currentIndex = index;
       break;
     }
@@ -106,6 +124,11 @@ function chooseNextWord(state: PuffSnakeState): string {
   const offset =
     1 + Math.floor(nextRandom(state) * (PUFF_SNAKE_WORDS.length - 1));
   return PUFF_SNAKE_WORDS[(currentIndex + offset) % PUFF_SNAKE_WORDS.length];
+}
+
+function chooseEndlessLetter(state: PuffSnakeState): string {
+  const index = Math.floor(nextRandom(state) * ENDLESS_ALPHABET.length);
+  return ENDLESS_ALPHABET.charAt(index);
 }
 
 function directionsAreOpposite(
@@ -161,28 +184,44 @@ function advanceSnake(state: PuffSnakeState): PuffSnakeEventFlags {
   }
 
   state.score += 10;
-  state.wordProgress += 1;
-  let events = PUFF_SNAKE_EVENT.ATE;
 
-  if (state.wordProgress === state.word.length) {
-    state.score += state.word.length * 5;
-    const removableSegments = Math.max(
-      0,
-      state.snake.length - STARTING_LENGTH,
-    );
-    const trimCount = Math.min(state.word.length, removableSegments);
-    state.snake.splice(state.snake.length - trimCount, trimCount);
-    state.word = chooseNextWord(state);
-    state.wordProgress = 0;
-    events |= PUFF_SNAKE_EVENT.PROOF;
+  if (state.objective.kind === "endless") {
+    state.pickup = spawnPickup(state, chooseEndlessLetter(state));
+    return PUFF_SNAKE_EVENT.ATE;
   }
 
-  state.pickup = spawnPickup(
-    state,
-    state.word.charAt(state.wordProgress),
+  const objective = state.objective;
+  const nextProgress = objective.progress + 1;
+  if (nextProgress < objective.word.length) {
+    state.objective = { ...objective, progress: nextProgress };
+    state.pickup = spawnPickup(state, objective.word.charAt(nextProgress));
+    return PUFF_SNAKE_EVENT.ATE;
+  }
+
+  state.score += objective.word.length * 5;
+  const removableSegments = Math.max(
+    0,
+    state.snake.length - STARTING_LENGTH,
   );
-  state.tickInterval = tickIntervalForScore(state.score);
-  return events;
+  const trimCount = Math.min(objective.word.length, removableSegments);
+  state.snake.splice(state.snake.length - trimCount, trimCount);
+  const completedWords = objective.completedWords + 1;
+
+  if (completedWords >= PUFF_SNAKE_WORDS_TO_ENDLESS) {
+    state.objective = { kind: "endless" };
+    state.pickup = spawnPickup(state, chooseEndlessLetter(state));
+    return PUFF_SNAKE_EVENT.ATE | PUFF_SNAKE_EVENT.PROOF;
+  }
+
+  const word = chooseNextWord(state, objective.word);
+  state.objective = {
+    kind: "word",
+    word,
+    progress: 0,
+    completedWords,
+  };
+  state.pickup = spawnPickup(state, word.charAt(0));
+  return PUFF_SNAKE_EVENT.ATE | PUFF_SNAKE_EVENT.PROOF;
 }
 
 export function createPuffSnake(seed = 0x48414d): PuffSnakeState {
@@ -197,16 +236,20 @@ export function createPuffSnake(seed = 0x48414d): PuffSnakeState {
     })),
     direction: "right",
     pendingDirection: "right",
-    pickup: { x: 0, y: 0, letter: "" },
-    word: "",
-    wordProgress: 0,
-    tickInterval: BASE_TICK_INTERVAL,
+    pickup: { x: 0, y: 0, letter: PUFF_SNAKE_WORDS[0].charAt(0) },
+    objective: {
+      kind: "word",
+      word: PUFF_SNAKE_WORDS[0],
+      progress: 0,
+      completedWords: 0,
+    },
     tickAccumulator: 0,
     rng: seed >>> 0 || 1,
   };
 
-  state.word = chooseInitialWord(state);
-  state.pickup = spawnPickup(state, state.word.charAt(0));
+  const word = chooseInitialWord(state);
+  state.objective = { kind: "word", word, progress: 0, completedWords: 0 };
+  state.pickup = spawnPickup(state, word.charAt(0));
   return state;
 }
 
@@ -243,16 +286,23 @@ export function stepPuffSnake(
     return PUFF_SNAKE_EVENT.NONE;
   }
 
-  state.tickAccumulator += Math.min(MAX_FRAME_DELTA, deltaSeconds);
+  const frameStartTickInterval = tickIntervalForObjective(state.objective);
+  state.tickAccumulator += Math.min(
+    frameStartTickInterval * MAX_CATCH_UP_TICKS,
+    deltaSeconds,
+  );
   let events = PUFF_SNAKE_EVENT.NONE;
+  let ticks = 0;
 
-  while (
-    state.status === "running" &&
-    state.tickAccumulator >= state.tickInterval
-  ) {
-    state.tickAccumulator -= state.tickInterval;
+  while (state.status === "running" && ticks < MAX_CATCH_UP_TICKS) {
+    const tickInterval = tickIntervalForObjective(state.objective);
+    if (state.tickAccumulator < tickInterval) break;
+    state.tickAccumulator -= tickInterval;
     events |= advanceSnake(state);
+    ticks += 1;
   }
+
+  if (ticks === MAX_CATCH_UP_TICKS) state.tickAccumulator = 0;
 
   return events;
 }

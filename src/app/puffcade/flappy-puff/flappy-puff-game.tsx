@@ -714,7 +714,7 @@ export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
       const renderStep = advancePuffRenderClock({
         accumulatorMs: renderAccumulatorMs,
         elapsedMs,
-        frameIntervalMs: renderProfile.frameIntervalMs,
+        cadence: renderProfile.cadence,
         phase: currentPhase,
         forceDraw: needsRedraw || phaseChanged,
         canDraw: Boolean(game && gates),

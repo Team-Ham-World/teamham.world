@@ -5,6 +5,10 @@ const RENDER_EARLY_TOLERANCE_MS = 1.5;
 
 export type PuffRenderPhase = "ready" | "playing" | "paused" | "dead";
 
+export type PuffRenderCadence =
+  | { kind: "display" }
+  | { kind: "capped"; frameIntervalMs: number };
+
 export interface PuffRenderProfileInput {
   devicePixelRatio: number;
   coarsePointer: boolean;
@@ -12,13 +16,13 @@ export interface PuffRenderProfileInput {
 
 export interface PuffRenderProfile {
   pixelRatio: number;
-  frameIntervalMs: number;
+  cadence: PuffRenderCadence;
 }
 
 export interface PuffRenderClockInput {
   accumulatorMs: number;
   elapsedMs: number;
-  frameIntervalMs: number;
+  cadence: PuffRenderCadence;
   phase: PuffRenderPhase;
   forceDraw: boolean;
   canDraw: boolean;
@@ -43,7 +47,7 @@ export function getPuffRenderProfile({
     : DESKTOP_PIXEL_RATIO_LIMIT;
   return {
     pixelRatio: Math.min(safePixelRatio, pixelRatioLimit),
-    frameIntervalMs: 1000 / RENDER_FPS,
+    cadence: { kind: "capped", frameIntervalMs: 1000 / RENDER_FPS },
   };
 }
 
@@ -51,12 +55,21 @@ export function getPuffRenderProfile({
 export function advancePuffRenderClock({
   accumulatorMs,
   elapsedMs,
-  frameIntervalMs,
+  cadence,
   phase,
   forceDraw,
   canDraw,
 }: PuffRenderClockInput): PuffRenderClockStep {
   const sceneIsMoving = phase === "playing" || phase === "ready";
+
+  if (cadence.kind === "display") {
+    return {
+      accumulatorMs: 0,
+      shouldDraw: canDraw && (forceDraw || sceneIsMoving),
+    };
+  }
+
+  const { frameIntervalMs } = cadence;
   let nextAccumulatorMs = sceneIsMoving
     ? accumulatorMs + elapsedMs
     : 0;

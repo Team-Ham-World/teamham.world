@@ -3,11 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
   advancePuffRenderClock,
   getPuffRenderProfile,
+  type PuffRenderCadence,
   type PuffRenderPhase,
 } from "@/lib/puff/performance";
 
 const FRAME_INTERVAL_60_FPS = 1000 / 60;
 const FRAME_INTERVAL_120_HZ = 1000 / 120;
+const CAPPED_60_FPS: PuffRenderCadence = {
+  kind: "capped",
+  frameIntervalMs: FRAME_INTERVAL_60_FPS,
+};
 
 function runRenderFrames(
   accumulatorMs: number,
@@ -20,7 +25,7 @@ function runRenderFrames(
     const step = advancePuffRenderClock({
       accumulatorMs,
       elapsedMs: FRAME_INTERVAL_120_HZ,
-      frameIntervalMs: FRAME_INTERVAL_60_FPS,
+      cadence: CAPPED_60_FPS,
       phase,
       forceDraw: frame === 0,
       canDraw: true,
@@ -41,7 +46,7 @@ describe("Flappy Puff render profile", () => {
       }),
     ).toEqual({
       pixelRatio: 1.25,
-      frameIntervalMs: 1000 / 60,
+      cadence: CAPPED_60_FPS,
     });
   });
 
@@ -53,7 +58,7 @@ describe("Flappy Puff render profile", () => {
       }),
     ).toEqual({
       pixelRatio: 1.5,
-      frameIntervalMs: 1000 / 60,
+      cadence: CAPPED_60_FPS,
     });
   });
 
@@ -101,5 +106,26 @@ describe("Flappy Puff render profile", () => {
       pauseScreenDebtMs: 0,
       resumedDraws: 75,
     });
+  });
+
+  it("can render every frame supplied by a high-refresh display", () => {
+    let accumulatorMs = 0;
+    let draws = 0;
+
+    for (let frame = 0; frame < 144; frame += 1) {
+      const step = advancePuffRenderClock({
+        accumulatorMs,
+        elapsedMs: 1000 / 144,
+        cadence: { kind: "display" },
+        phase: "playing",
+        forceDraw: false,
+        canDraw: true,
+      });
+      accumulatorMs = step.accumulatorMs;
+      if (step.shouldDraw) draws += 1;
+    }
+
+    expect(draws).toBe(144);
+    expect(accumulatorMs).toBe(0);
   });
 });
