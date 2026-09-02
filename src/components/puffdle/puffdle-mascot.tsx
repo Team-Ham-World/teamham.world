@@ -39,8 +39,8 @@ interface Shockwave {
   maxLife: number;
 }
 
-const COLS = 36;
-const ROWS = 26;
+const COLS = 42;
+const ROWS = 28;
 const CELL_ASPECT = 0.6 / 0.74;
 const BLINK_PERIOD = 4.4;
 const BLINK_SHUT = 0.14;

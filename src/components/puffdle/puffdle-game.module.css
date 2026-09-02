@@ -8,23 +8,36 @@
   grid-template-columns: 1fr;
   gap: 1.75rem;
   width: 100%;
-  max-width: 78rem;
+  max-width: 88rem;
   margin: 0 auto;
   color: var(--color-ink);
 }
 
 @media (min-width: 1024px) {
   .gameContainer {
-    grid-template-columns: minmax(0, 1fr) 340px;
-    gap: 2.25rem;
+    grid-template-columns: 280px minmax(0, 1fr) 340px;
+    gap: 1.75rem;
     align-items: start;
   }
 }
 
 @media (min-width: 1280px) {
   .gameContainer {
-    grid-template-columns: minmax(0, 1fr) 380px;
-    gap: 3rem;
+    grid-template-columns: 310px minmax(0, 1fr) 390px;
+    gap: 2.25rem;
+  }
+}
+
+.leftColumn {
+  width: 100%;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+@media (min-width: 1024px) {
+  .leftColumn {
+    position: sticky;
+    top: calc(var(--nav-height, 5rem) + 1.25rem);
   }
 }
 
@@ -33,11 +46,13 @@
   flex-direction: column;
   align-items: center;
   width: 100%;
+  max-width: 38rem;
+  margin: 0 auto;
 }
 
 .sideColumn {
   width: 100%;
-  max-width: 380px;
+  max-width: 390px;
   margin: 0 auto;
 }
 
@@ -427,7 +442,7 @@
 /* ASCII Rendering Viewport Stage */
 .mascotStage {
   position: relative;
-  height: 240px;
+  height: 290px;
   background: var(--color-paper);
   border: 2px solid var(--color-ink);
   box-shadow: inset 2px 2px 0 rgb(0 0 0 / 6%);
@@ -449,8 +464,8 @@
   position: absolute;
   margin: 0;
   font-family: var(--font-mono);
-  font-size: 9px;
-  line-height: 7.2px;
+  font-size: 10px;
+  line-height: 8.5px;
   font-weight: 700;
   letter-spacing: 0;
   white-space: pre;

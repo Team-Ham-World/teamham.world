@@ -24,6 +24,7 @@ import {
 } from "@/lib/puffdle/words";
 
 import styles from "./puffdle-game.module.css";
+import { PuffdleLiveFeed } from "./puffdle-live-feed";
 import { PuffdleMascot } from "./puffdle-mascot";
 
 const KEYBOARD_ROWS = [
@@ -379,6 +380,15 @@ export function PuffdleGame() {
 
   return (
     <div className={styles.gameContainer}>
+      {/* Left Column: Live Decoders Feed */}
+      <aside className={styles.leftColumn}>
+        <PuffdleLiveFeed
+          currentEvaluations={gameState.evaluations}
+          currentStatus={gameState.status}
+          username={leaderboard.username}
+        />
+      </aside>
+
       {/* Main Game Column */}
       <div className={styles.mainColumn}>
         {/* Header Block */}
