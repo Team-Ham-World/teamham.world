@@ -45,6 +45,10 @@ import {
   generateGameAccessToken,
 } from '@/lib/auth/game-oauth';
 import { getPuffLeaderboard, savePuffHighScore } from '@/lib/puff/leaderboard';
+import {
+  getPrintRunLeaderboard,
+  savePrintRunHighScore,
+} from '@/lib/puff/print-run-leaderboard';
 import type { MemberContentInput } from '@/lib/members/validation';
 import type { MemberPageDocumentV2 } from '@/lib/members/v2/document';
 import { legacyToDoc } from '@/lib/members/v2/legacy-to-doc';
@@ -467,10 +471,11 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migrations 0001 through 0008
+    // 2. Clean existing tables and apply migrations 0001 through 0009
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_mutation_rate_limits CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_assets CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_pages CASCADE;`);
+    await ownerPool.query(`DROP TABLE IF EXISTS public.puff_print_run_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.puff_flappy_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_access_tokens CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_authorization_codes CASCADE;`);
@@ -513,6 +518,11 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       '../../migrations/0008_member_page_moderation_privileges.sql'
     );
     const migration0008Sql = fs.readFileSync(migration0008Path, 'utf8');
+    const migration0009Path = path.resolve(
+      __dirname,
+      '../../migrations/0009_puff_print_run_leaderboard.sql'
+    );
+    const migration0009Sql = fs.readFileSync(migration0009Path, 'utf8');
 
     const validExternalShowcase = {
       kind: 'external',
@@ -974,6 +984,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
 
     await ownerPool.query(migration0007Sql);
     await ownerPool.query(migration0008Sql);
+    await ownerPool.query(migration0009Sql);
 
     const memberV2BackfillRows = await ownerPool.query<MemberV2BackfillRow>(
       `SELECT
@@ -1027,6 +1038,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     // Clear data between tests to ensure test isolation in FK-safe order
     await ownerPool.query('DELETE FROM public.member_page_assets;');
     await ownerPool.query('DELETE FROM public.member_pages;');
+    await ownerPool.query('DELETE FROM public.puff_print_run_scores;');
     await ownerPool.query('DELETE FROM public.puff_flappy_scores;');
     await ownerPool.query('DELETE FROM public.game_access_tokens;');
     await ownerPool.query('DELETE FROM public.game_authorization_codes;');
@@ -3735,6 +3747,369 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         personalBest: 11,
         scores: [{ rank: 1, username: 'puffpilot', score: 11, mine: true }],
       });
+    });
+  });
+
+  describe('13a. Puff Print Run Member Leaderboard', () => {
+    let savedEnv: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      savedEnv = {
+        AUTH_MODE: process.env.AUTH_MODE,
+        APP_BASE_URL: process.env.APP_BASE_URL,
+        OAUTH_STATE_HMAC_SECRET: process.env.OAUTH_STATE_HMAC_SECRET,
+        GAME_AUTH_REQUEST_HMAC_SECRET: process.env.GAME_AUTH_REQUEST_HMAC_SECRET,
+        DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID,
+        DISCORD_CLIENT_SECRET: process.env.DISCORD_CLIENT_SECRET,
+        DISCORD_GUILD_ID: process.env.DISCORD_GUILD_ID,
+        DISCORD_REQUIRED_ROLE_ID: process.env.DISCORD_REQUIRED_ROLE_ID,
+        DATABASE_URL: process.env.DATABASE_URL,
+      };
+
+      Object.assign(process.env, VALID_DEV_ENV, {
+        APP_BASE_URL: 'http://localhost:3000',
+        DATABASE_URL: runtimeUrl,
+      });
+    });
+
+    afterEach(() => {
+      for (const [key, val] of Object.entries(savedEnv)) {
+        if (val === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = val;
+        }
+      }
+    });
+
+    type PrintRunAccountOptions = {
+      id?: string;
+      username?: string | null;
+      membershipStatus?: 'eligible' | 'ineligible';
+      accessStatus?: 'active' | 'suspended';
+      stale?: boolean;
+    };
+
+    async function createPrintRunAccount(suffix: number, options: PrintRunAccountOptions = {}) {
+      const result = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.accounts (
+           id,
+           discord_user_id,
+           discord_username,
+           membership_status,
+           access_status,
+           membership_checked_at
+         ) VALUES (
+           COALESCE($1::uuid, gen_random_uuid()),
+           $2,
+           $3,
+           $4,
+           $5,
+           CASE WHEN $6 THEN NOW() - INTERVAL '25 hours' ELSE NOW() END
+         )
+         RETURNING id`,
+        [
+          options.id ?? null,
+          makeDiscordId(suffix),
+          options.username === undefined ? `runner${suffix}` : options.username,
+          options.membershipStatus ?? 'eligible',
+          options.accessStatus ?? 'active',
+          options.stale ?? false,
+        ]
+      );
+      return result.rows[0].id;
+    }
+
+    it('creates the named constraints and ranking index and enforces score, timestamp, FK, and cascade rules', async () => {
+      const schema = await ownerPool.query<{
+        constraint_name: string;
+        definition: string;
+      }>(
+        `SELECT conname AS constraint_name, pg_get_constraintdef(oid) AS definition
+         FROM pg_constraint
+         WHERE conrelid = 'public.puff_print_run_scores'::regclass
+           AND conname IN (
+             'ck_puff_print_run_scores_high_score',
+             'ck_puff_print_run_scores_timestamps'
+           )
+         ORDER BY conname`
+      );
+      expect(schema.rows.map((row) => row.constraint_name)).toEqual([
+        'ck_puff_print_run_scores_high_score',
+        'ck_puff_print_run_scores_timestamps',
+      ]);
+      expect(schema.rows[0].definition).toContain('1000000');
+      expect(schema.rows[0].definition).toContain('% 5');
+      expect(schema.rows[1].definition).toContain('updated_at >= achieved_at');
+
+      const index = await ownerPool.query<{ indexdef: string }>(
+        `SELECT indexdef
+         FROM pg_indexes
+         WHERE schemaname = 'public'
+           AND tablename = 'puff_print_run_scores'
+           AND indexname = 'idx_puff_print_run_scores_ranking'`
+      );
+      expect(index.rows[0].indexdef).toContain(
+        'high_score DESC, achieved_at, account_id'
+      );
+
+      const accountId = await createPrintRunAccount(1400);
+      for (const score of [-5, 1_000_005, 6]) {
+        await expect(
+          ownerPool.query(
+            `INSERT INTO public.puff_print_run_scores (account_id, high_score)
+             VALUES ($1, $2)`,
+            [accountId, score]
+          )
+        ).rejects.toMatchObject({
+          code: '23514',
+          constraint: 'ck_puff_print_run_scores_high_score',
+        });
+      }
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.puff_print_run_scores (
+             account_id, high_score, achieved_at, updated_at
+           ) VALUES ($1, 10, NOW(), NOW() - INTERVAL '1 second')`,
+          [accountId]
+        )
+      ).rejects.toMatchObject({
+        code: '23514',
+        constraint: 'ck_puff_print_run_scores_timestamps',
+      });
+
+      await expect(
+        ownerPool.query(
+          `INSERT INTO public.puff_print_run_scores (account_id, high_score)
+           VALUES ('ffffffff-ffff-4fff-8fff-ffffffffffff', 10)`
+        )
+      ).rejects.toMatchObject({ code: '23503' });
+
+      await ownerPool.query(
+        `INSERT INTO public.puff_print_run_scores (account_id, high_score)
+         VALUES ($1, 1000000)`,
+        [accountId]
+      );
+      await ownerPool.query(`DELETE FROM public.accounts WHERE id = $1`, [accountId]);
+      const cascaded = await ownerPool.query(
+        `SELECT account_id FROM public.puff_print_run_scores WHERE account_id = $1`,
+        [accountId]
+      );
+      expect(cascaded.rowCount).toBe(0);
+    });
+
+    it('grants only the exact runtime score operations and rejects forbidden mutations', async () => {
+      const privileges = await runtimePool.query<{
+        can_select: boolean;
+        can_table_insert: boolean;
+        can_insert_account: boolean;
+        can_insert_score: boolean;
+        can_insert_achieved: boolean;
+        can_insert_updated: boolean;
+        can_update_account: boolean;
+        can_update_score: boolean;
+        can_update_achieved: boolean;
+        can_update_updated: boolean;
+        can_delete: boolean;
+        can_truncate: boolean;
+      }>(`
+        SELECT
+          has_table_privilege(current_user, 'public.puff_print_run_scores', 'SELECT') AS can_select,
+          has_table_privilege(current_user, 'public.puff_print_run_scores', 'INSERT') AS can_table_insert,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'account_id', 'INSERT') AS can_insert_account,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'high_score', 'INSERT') AS can_insert_score,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'achieved_at', 'INSERT') AS can_insert_achieved,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'updated_at', 'INSERT') AS can_insert_updated,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'account_id', 'UPDATE') AS can_update_account,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'high_score', 'UPDATE') AS can_update_score,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'achieved_at', 'UPDATE') AS can_update_achieved,
+          has_column_privilege(current_user, 'public.puff_print_run_scores', 'updated_at', 'UPDATE') AS can_update_updated,
+          has_table_privilege(current_user, 'public.puff_print_run_scores', 'DELETE') AS can_delete,
+          has_table_privilege(current_user, 'public.puff_print_run_scores', 'TRUNCATE') AS can_truncate
+      `);
+      expect(privileges.rows[0]).toEqual({
+        can_select: true,
+        can_table_insert: false,
+        can_insert_account: true,
+        can_insert_score: true,
+        can_insert_achieved: false,
+        can_insert_updated: false,
+        can_update_account: false,
+        can_update_score: true,
+        can_update_achieved: true,
+        can_update_updated: true,
+        can_delete: false,
+        can_truncate: false,
+      });
+
+      const accountId = await createPrintRunAccount(1401);
+      await runtimePool.query(
+        `INSERT INTO public.puff_print_run_scores (account_id, high_score) VALUES ($1, 10)`,
+        [accountId]
+      );
+      await expect(
+        runtimePool.query(
+          `INSERT INTO public.puff_print_run_scores (
+             account_id, high_score, achieved_at, updated_at
+           ) VALUES ($1, 15, NOW(), NOW())`,
+          [accountId]
+        )
+      ).rejects.toMatchObject({ code: '42501' });
+      await expect(
+        runtimePool.query(
+          `UPDATE public.puff_print_run_scores SET account_id = account_id WHERE account_id = $1`,
+          [accountId]
+        )
+      ).rejects.toMatchObject({ code: '42501' });
+      await expect(
+        runtimePool.query(
+          `DELETE FROM public.puff_print_run_scores WHERE account_id = $1`,
+          [accountId]
+        )
+      ).rejects.toMatchObject({ code: '42501' });
+    });
+
+    it('keeps 10 -> 5 -> 10 -> 25 monotonic timestamps and remains independent from Flappy Puff', async () => {
+      const accountId = await createPrintRunAccount(1402, { username: 'printpilot' });
+
+      await expect(savePrintRunHighScore(accountId, 10, runtimeUrl)).resolves.toBe(10);
+      const first = await ownerPool.query<{ achieved_at: Date; updated_at: Date }>(
+        `SELECT achieved_at, updated_at
+         FROM public.puff_print_run_scores
+         WHERE account_id = $1`,
+        [accountId]
+      );
+
+      await ownerPool.query(`SELECT pg_sleep(0.02)`);
+      await expect(savePrintRunHighScore(accountId, 5, runtimeUrl)).resolves.toBe(10);
+      const lower = await ownerPool.query<{ achieved_at: Date; updated_at: Date }>(
+        `SELECT achieved_at, updated_at
+         FROM public.puff_print_run_scores
+         WHERE account_id = $1`,
+        [accountId]
+      );
+      expect(lower.rows[0].achieved_at.getTime()).toBe(first.rows[0].achieved_at.getTime());
+      expect(lower.rows[0].updated_at.getTime()).toBeGreaterThan(first.rows[0].updated_at.getTime());
+
+      await ownerPool.query(`SELECT pg_sleep(0.02)`);
+      await expect(savePrintRunHighScore(accountId, 10, runtimeUrl)).resolves.toBe(10);
+      const equal = await ownerPool.query<{ achieved_at: Date; updated_at: Date }>(
+        `SELECT achieved_at, updated_at
+         FROM public.puff_print_run_scores
+         WHERE account_id = $1`,
+        [accountId]
+      );
+      expect(equal.rows[0].achieved_at.getTime()).toBe(first.rows[0].achieved_at.getTime());
+      expect(equal.rows[0].updated_at.getTime()).toBeGreaterThan(lower.rows[0].updated_at.getTime());
+
+      await ownerPool.query(`SELECT pg_sleep(0.02)`);
+      await expect(savePrintRunHighScore(accountId, 25, runtimeUrl)).resolves.toBe(25);
+      const higher = await ownerPool.query<{ achieved_at: Date; updated_at: Date }>(
+        `SELECT achieved_at, updated_at
+         FROM public.puff_print_run_scores
+         WHERE account_id = $1`,
+        [accountId]
+      );
+      expect(higher.rows[0].achieved_at.getTime()).toBeGreaterThan(first.rows[0].achieved_at.getTime());
+      expect(higher.rows[0].updated_at.getTime()).toBeGreaterThanOrEqual(
+        higher.rows[0].achieved_at.getTime()
+      );
+
+      await expect(savePuffHighScore(accountId, 99, runtimeUrl)).resolves.toBe(99);
+      await expect(getPrintRunLeaderboard(accountId, runtimeUrl)).resolves.toMatchObject({
+        personalBest: 25,
+      });
+      await expect(getPuffLeaderboard(accountId, runtimeUrl)).resolves.toMatchObject({
+        personalBest: 99,
+      });
+    });
+
+    it('rejects absent, suspended, ineligible, and stale accounts and excludes their seeded scores', async () => {
+      const absentId = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+      await expect(savePrintRunHighScore(absentId, 50, runtimeUrl)).resolves.toBeNull();
+      await expect(getPrintRunLeaderboard(absentId, runtimeUrl)).resolves.toBeNull();
+
+      const excluded = [
+        await createPrintRunAccount(1410, { accessStatus: 'suspended' }),
+        await createPrintRunAccount(1411, { membershipStatus: 'ineligible' }),
+        await createPrintRunAccount(1412, { stale: true }),
+      ];
+      for (const accountId of excluded) {
+        await ownerPool.query(
+          `INSERT INTO public.puff_print_run_scores (account_id, high_score)
+           VALUES ($1, 100)`,
+          [accountId]
+        );
+        await expect(savePrintRunHighScore(accountId, 200, runtimeUrl)).resolves.toBeNull();
+        await expect(getPrintRunLeaderboard(accountId, runtimeUrl)).resolves.toBeNull();
+      }
+
+      const eligibleId = await createPrintRunAccount(1413, { username: 'eligibleviewer' });
+      await expect(getPrintRunLeaderboard(eligibleId, runtimeUrl)).resolves.toEqual({
+        personalBest: 0,
+        scores: [],
+      });
+    });
+
+    it('orders ties by achieved time then account ID, marks mine, and falls back missing usernames', async () => {
+      const account1 = await createPrintRunAccount(1420, {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1',
+        username: 'runnerone',
+      });
+      const account2 = await createPrintRunAccount(1421, {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2',
+        username: 'runnertwo',
+      });
+      const account3 = await createPrintRunAccount(1422, {
+        id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
+        username: 'runnerthree',
+      });
+      const fallback = await createPrintRunAccount(1423, { username: null });
+
+      await ownerPool.query(
+        `INSERT INTO public.puff_print_run_scores (
+           account_id, high_score, achieved_at, updated_at
+         ) VALUES
+           ($1, 100, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
+           ($2, 100, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+           ($3, 100, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'),
+           ($4, 95,  '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+        [account1, account2, account3, fallback]
+      );
+
+      await expect(getPrintRunLeaderboard(account1, runtimeUrl)).resolves.toEqual({
+        personalBest: 100,
+        scores: [
+          { rank: 1, username: 'runnertwo', score: 100, mine: false },
+          { rank: 2, username: 'runnerone', score: 100, mine: true },
+          { rank: 3, username: 'runnerthree', score: 100, mine: false },
+          { rank: 4, username: 'Member', score: 95, mine: false },
+        ],
+      });
+    });
+
+    it('returns only the top ten while retaining an out-of-board personal best', async () => {
+      const accounts: string[] = [];
+      for (let index = 0; index < 12; index += 1) {
+        const accountId = await createPrintRunAccount(1430 + index, {
+          username: `toprunner${index}`,
+        });
+        accounts.push(accountId);
+        await expect(
+          savePrintRunHighScore(accountId, 200 - index * 5, runtimeUrl)
+        ).resolves.toBe(200 - index * 5);
+      }
+
+      const snapshot = await getPrintRunLeaderboard(accounts[11], runtimeUrl);
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.personalBest).toBe(145);
+      expect(snapshot?.scores).toHaveLength(10);
+      expect(snapshot?.scores.map((entry) => entry.rank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(snapshot?.scores.map((entry) => entry.score)).toEqual([
+        200, 195, 190, 185, 180, 175, 170, 165, 160, 155,
+      ]);
+      expect(snapshot?.scores.some((entry) => entry.mine)).toBe(false);
     });
   });
 

@@ -25,6 +25,25 @@ import styles from "./puff-print-run-game.module.css";
 
 type GamePhase = PuffRenderPhase;
 
+interface PuffLeaderboardEntry {
+  rank: number;
+  username: string;
+  score: number;
+  mine: boolean;
+}
+
+type LeaderboardState =
+  | { status: "loading"; authenticated: false; username: null }
+  | { status: "signed-out"; authenticated: false; username: null }
+  | { status: "error"; authenticated: false; username: null }
+  | {
+      status: "ready" | "saving";
+      authenticated: true;
+      username: string | null;
+      personalBest: number;
+      scores: PuffLeaderboardEntry[];
+    };
+
 interface Palette {
   paper: string;
   surface: string;
@@ -86,6 +105,108 @@ function cellNoise(col: number, row: number): number {
   let h = (col * 374761393 + row * 668265263) | 0;
   h = Math.imul(h ^ (h >>> 13), 1274126177);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Scores arrive in 5-point steps: 10 per letter plus 5 per letter on proof. */
+function isValidLeaderboardScore(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 1_000_000 &&
+    value % 5 === 0
+  );
+}
+
+function isLeaderboardEntry(value: unknown): value is PuffLeaderboardEntry {
+  if (!isRecord(value)) return false;
+  const { rank, username, score, mine } = value;
+  if (
+    typeof rank !== "number" ||
+    !Number.isSafeInteger(rank) ||
+    rank < 1 ||
+    rank > 10
+  ) {
+    return false;
+  }
+  return (
+    typeof username === "string" &&
+    username.length > 0 &&
+    isValidLeaderboardScore(score) &&
+    typeof mine === "boolean"
+  );
+}
+
+function readLeaderboardPayload(value: unknown): LeaderboardState | null {
+  if (!isRecord(value)) return null;
+  if (value.authenticated === false) {
+    return { status: "signed-out", authenticated: false, username: null };
+  }
+  if (
+    value.authenticated !== true ||
+    !(typeof value.username === "string" || value.username === null) ||
+    !isValidLeaderboardScore(value.personalBest) ||
+    !Array.isArray(value.scores) ||
+    !value.scores.every(isLeaderboardEntry)
+  ) {
+    return null;
+  }
+  return {
+    status: "ready",
+    authenticated: true,
+    username: value.username,
+    personalBest: value.personalBest,
+    scores: value.scores,
+  };
+}
+
+function Leaderboard({ state }: Readonly<{ state: LeaderboardState }>) {
+  if (state.status === "loading") {
+    return <p className={styles.boardMessage}>Checking the member board…</p>;
+  }
+  if (state.status === "signed-out") {
+    return (
+      <p className={styles.boardMessage}>
+        Sign in as a Team HAM member before playing to save a shared high score.
+      </p>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <p className={styles.boardMessage}>
+        The score printer is offline right now.
+      </p>
+    );
+  }
+  if (state.scores.length === 0) {
+    return (
+      <p className={styles.boardMessage}>
+        No scores yet. The first print could be yours.
+      </p>
+    );
+  }
+
+  return (
+    <ol
+      className={styles.leaderboard}
+      aria-label="Puff Print Run member leaderboard"
+    >
+      {state.scores.slice(0, 7).map((entry) => (
+        <li
+          key={`${entry.rank}-${entry.username}`}
+          data-mine={entry.mine || undefined}
+        >
+          <span>{String(entry.rank).padStart(2, "0")}</span>
+          <strong>{entry.username}</strong>
+          <b>{entry.score}</b>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function boardLayout(width: number, height: number): BoardLayout {
@@ -157,14 +278,177 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
   const [localBest, setLocalBest] = useState(0);
   const [newBest, setNewBest] = useState(false);
   const [announcement, setAnnouncement] = useState("Puff Print Run ready.");
+  const [leaderboard, setLeaderboard] = useState<LeaderboardState>({
+    status: "loading",
+    authenticated: false,
+    username: null,
+  });
+  const leaderboardRef = useRef(leaderboard);
+
+  const applyLeaderboard = useCallback((next: LeaderboardState) => {
+    leaderboardRef.current = next;
+    setLeaderboard(next);
+  }, []);
 
   const setPhase = useCallback((next: GamePhase) => {
     phaseRef.current = next;
     setPhaseState(next);
   }, []);
 
+  // Post-queue: only one POST is ever in flight, and queued runs coalesce to
+  // their max (the backend stores one monotonic high score). Kept in a ref so
+  // the pump reads live state, never a stale closure.
+  const submitQueueRef = useRef({ active: false, pending: 0 });
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    const queue = submitQueueRef.current;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      queue.pending = 0;
+    };
+  }, []);
+
+  // Serialized submission pump: at most one POST is in flight, and scores
+  // that finish while POSTs are busy coalesce to their max (the backend stores
+  // one monotonic high score). A queued score waits out an in-flight GET so a
+  // 401 cannot strand it, and the initial leaderboard load flushes the queue
+  // once auth resolves. Defined as a stable effect closure (assigned to a ref)
+  // so it can re-run itself after a POST settles without losing the React
+  // Compiler's memoization guarantees.
+  const pumpScoreSubmissionsRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    pumpScoreSubmissionsRef.current = () => {
+      const queue = submitQueueRef.current;
+      const board = leaderboardRef.current;
+      if (
+        !mountedRef.current ||
+        !board.authenticated ||
+        queue.active ||
+        queue.pending <= 0
+      ) {
+        return;
+      }
+      queue.active = true;
+      const runScore = queue.pending;
+      queue.pending = 0;
+
+      applyLeaderboard({ ...board, status: "saving" });
+
+      void (async () => {
+        try {
+          const response = await fetch("/api/puff/print-run/leaderboard", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ score: runScore }),
+          });
+          if (!mountedRef.current) return;
+
+          if (response.status === 401) {
+            let code: unknown;
+            try {
+              const payload: unknown = await response.json();
+              if (!mountedRef.current) return;
+              code = isRecord(payload) ? payload.error : undefined;
+            } catch {
+              code = undefined;
+            }
+            if (code === "authentication_required") {
+              // The member session ended mid-run: lock the board, drop any
+              // queued submission (it would 401 too), keep the local best.
+              queue.pending = 0;
+              applyLeaderboard({
+                status: "signed-out",
+                authenticated: false,
+                username: null,
+              });
+              return;
+            }
+            throw new Error("score save rejected");
+          }
+          if (!response.ok) throw new Error("score save failed");
+
+          const payload: unknown = await response.json();
+          if (!mountedRef.current) return;
+          const parsed = readLeaderboardPayload(payload);
+          if (!parsed || !parsed.authenticated) {
+            throw new Error("invalid score response");
+          }
+          applyLeaderboard(parsed);
+        } catch {
+          if (!mountedRef.current) return;
+          // A saving board can only drop back to ready; any other status
+          // (including the signed-out board a 401 just applied) stays as-is.
+          const current = leaderboardRef.current;
+          if (current.authenticated && current.status === "saving") {
+            applyLeaderboard({ ...current, status: "ready" });
+          }
+          setAnnouncement(
+            "Score saved locally. The member board could not be reached.",
+          );
+        } finally {
+          queue.active = false;
+          if (mountedRef.current && queue.pending > 0) {
+            pumpScoreSubmissionsRef.current();
+          }
+        }
+      })();
+    };
+  }, [applyLeaderboard]);
+
+  const queueMemberScore = useCallback((runScore: number) => {
+    if (runScore <= 0) return;
+    submitQueueRef.current.pending = Math.max(
+      submitQueueRef.current.pending,
+      runScore,
+    );
+    pumpScoreSubmissionsRef.current();
+  }, []);
+  const queueMemberScoreRef = useRef(queueMemberScore);
+  useEffect(() => {
+    queueMemberScoreRef.current = queueMemberScore;
+  }, [queueMemberScore]);
+
+  const loadLeaderboard = useCallback(async () => {
+    try {
+      const response = await fetch("/api/puff/print-run/leaderboard", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
+      if (!mountedRef.current) return;
+      if (response.status === 404) {
+        submitQueueRef.current.pending = 0;
+        applyLeaderboard({
+          status: "signed-out",
+          authenticated: false,
+          username: null,
+        });
+        return;
+      }
+      if (!response.ok) throw new Error("leaderboard unavailable");
+      const payload: unknown = await response.json();
+      if (!mountedRef.current) return;
+      const parsed = readLeaderboardPayload(payload);
+      if (!parsed) throw new Error("invalid leaderboard response");
+      if (!parsed.authenticated) submitQueueRef.current.pending = 0;
+      applyLeaderboard(parsed);
+      // The board just became authenticated: POST any score a run finished
+      // while this GET was still loading.
+      pumpScoreSubmissionsRef.current();
+    } catch {
+      if (!mountedRef.current) return;
+      applyLeaderboard({
+        status: "error",
+        authenticated: false,
+        username: null,
+      });
+    }
+  }, [applyLeaderboard]);
+
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
+      void loadLeaderboard();
       try {
         const stored = Number.parseInt(
           localStorage.getItem(BEST_SCORE_KEY) || "0",
@@ -176,11 +460,13 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, []);
+  }, [loadLeaderboard]);
 
   const finishRun = useCallback(
     (runScore: number) => {
-      setNewBest(runScore > localBest);
+      const board = leaderboardRef.current;
+      const memberBest = board.authenticated ? board.personalBest : 0;
+      setNewBest(runScore > Math.max(localBest, memberBest));
       setPhase("dead");
       setScore(runScore);
       setLocalBest((previous) => {
@@ -195,6 +481,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       setAnnouncement(
         `Paper jam. Run over. Score ${runScore}. Press Space to go again.`,
       );
+      queueMemberScoreRef.current(runScore);
     },
     [localBest, setPhase],
   );
@@ -708,7 +995,8 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
     };
   }, []);
 
-  const bestScore = localBest;
+  const memberBest = leaderboard.authenticated ? leaderboard.personalBest : 0;
+  const bestScore = Math.max(localBest, memberBest);
   const wordKey = `${word}-${proofSignal}`;
 
   return (
@@ -742,6 +1030,13 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
                   {letter}
                 </span>
               ))}
+            </p>
+            <p className={styles.memberState}>
+              {leaderboard.authenticated
+                ? leaderboard.status === "saving"
+                  ? "Printing score…"
+                  : `Member: ${leaderboard.username || "HAM"}`
+                : "Local run"}
             </p>
           </div>
         </header>
@@ -808,31 +1103,42 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
             {phase === "dead" && (
               <div className={styles.overlay}>
                 <div className={styles.resultsCard}>
-                  <p className={styles.eyebrow}>PAPER JAM</p>
-                  <p className={styles.bigScore}>{score}</p>
-                  {newBest && (
-                    <p className={styles.newBestStamp}>New best</p>
-                  )}
-                  <p className={styles.scoreLabel}>points pressed</p>
-                  <p className={styles.bestLine}>
-                    Best print: <strong>{bestScore}</strong>
-                  </p>
-                  <div className={styles.buttonRow}>
-                    <button
-                      type="button"
-                      onClick={() => createFreshRun(true)}
-                      className={styles.primaryButton}
-                    >
-                      Run it again <kbd>SPACE</kbd>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={exitGame}
-                      className={styles.secondaryButton}
-                    >
-                      Back to HAM
-                    </button>
-                  </div>
+                  <section className={styles.scoreCard}>
+                    <p className={styles.eyebrow}>PAPER JAM</p>
+                    <p className={styles.bigScore}>{score}</p>
+                    {newBest && (
+                      <p className={styles.newBestStamp}>New best</p>
+                    )}
+                    <p className={styles.scoreLabel}>points pressed</p>
+                    <p className={styles.bestLine}>
+                      Best print: <strong>{bestScore}</strong>
+                    </p>
+                    <div className={styles.buttonRow}>
+                      <button
+                        type="button"
+                        onClick={() => createFreshRun(true)}
+                        className={styles.primaryButton}
+                      >
+                        Run it again <kbd>SPACE</kbd>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={exitGame}
+                        className={styles.secondaryButton}
+                      >
+                        Back to HAM
+                      </button>
+                    </div>
+                  </section>
+                  <section className={styles.boardCard}>
+                    <div className={styles.boardHeading}>
+                      <p>MEMBER HIGH SCORES</p>
+                      <span>
+                        {leaderboard.authenticated ? "LIVE" : "LOCKED"}
+                      </span>
+                    </div>
+                    <Leaderboard state={leaderboard} />
+                  </section>
                 </div>
               </div>
             )}

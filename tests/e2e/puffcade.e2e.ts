@@ -310,6 +310,49 @@ test.describe("Puff Print Run", () => {
     await skipUnlessAppUp();
   });
 
+  type E2EPage = import("@playwright/test").Page;
+  type GameLocator = ReturnType<E2EPage["locator"]>;
+  const POSITIVE_RUN_SEED = 2161;
+
+  async function setGameSeed(page: E2EPage, seed: number) {
+    await page.addInitScript({ content: `Date.now = () => ${seed};` });
+  }
+
+  async function startRun(page: E2EPage): Promise<GameLocator> {
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await game.getByRole("button", { name: /start the run/i }).click();
+    return game;
+  }
+  async function waitForJam(game: GameLocator) {
+    await expect(game.getByText("PAPER JAM", { exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+  }
+  // Seed 0x48414d puts the first pickup at (18, 0), away from a straight run.
+  async function zeroScoreJam(page: E2EPage) {
+    const game = await startRun(page);
+    await waitForJam(game);
+    return game;
+  }
+  // The mounted run uses the engine's default seed. Replaying uses Date.now,
+  // where seed 2161 puts the first pickup at (12, 8), one cell ahead of Puff.
+  async function positiveScoreJam(page: E2EPage) {
+    expect(await page.evaluate(() => Date.now())).toBe(POSITIVE_RUN_SEED);
+    const game = await startRun(page);
+    await waitForJam(game);
+    await game.getByRole("button", { name: /run it again/i }).click();
+    await expect(game.getByText("PAPER JAM", { exact: true })).toHaveCount(0);
+    await waitForJam(game);
+    await expect
+      .poll(() =>
+        game.evaluate(() =>
+          window.localStorage.getItem("ham:puff-print-run:best:v1"),
+        ),
+      )
+      .toBe("10");
+    return game;
+  }
+
   test("is discoverable from the catalog beside Flappy Puff", async ({
     page,
   }) => {
@@ -476,6 +519,291 @@ test.describe("Puff Print Run", () => {
     await expect(page).not.toHaveURL(/\/puffcade\/puff-print-run/);
     await expect(
       page.locator('[data-arcade-shell="fullscreen"]'),
+    ).toHaveCount(0);
+  });
+
+  test("renders the member board and combined best for a signed-in player", async ({
+    page,
+  }) => {
+    await setGameSeed(page, 0x48414d);
+    let posts = 0;
+    await page.route("/api/puff/print-run/leaderboard", async (route) => {
+      if (route.request().method() === "POST") {
+        posts += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            authenticated: true,
+            username: "puffmaster",
+            personalBest: 90,
+            scores: [
+              { rank: 1, username: "puffmaster", score: 90, mine: true },
+            ],
+          }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          authenticated: true,
+          username: "puffmaster",
+          personalBest: 45,
+          scores: [
+            { rank: 1, username: "puffmaster", score: 45, mine: true },
+            { rank: 2, username: "typesetter", score: 30, mine: false },
+          ],
+        }),
+      });
+    });
+
+    await page.goto("/puffcade/puff-print-run");
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+
+    // HUD carries member identity and the combined best (45 from the member
+    // record; no local storage entry beats it yet).
+    await expect(game.getByText(/member: puffmaster/i)).toBeVisible();
+    const stats = game.locator('[aria-label="Current game statistics"]');
+    await expect(stats).toContainText("45");
+
+    // Finish a deterministic zero run: the board shows member rows with the
+    // mine highlight, and nothing is posted for a scoreless jam.
+    await zeroScoreJam(page);
+    await expect(
+      game.getByText(/member high scores/i),
+    ).toBeVisible();
+    await expect(game.getByText("LIVE", { exact: true })).toBeVisible();
+    await expect(
+      game.getByRole("list", { name: /member leaderboard/i }),
+    ).toBeVisible();
+    await expect(game.getByText("typesetter")).toBeVisible();
+    expect(posts).toBe(0);
+    await expect(stats).toContainText("45");
+  });
+
+  test("falls back to a non-blocking error card when the board payload is malformed", async ({
+    page,
+  }) => {
+    // Rank 0 is outside the Print Run board contract and score 7 is not a
+    // 5-point step; both must be rejected without breaking the run.
+    await page.route("**/api/puff/print-run/leaderboard**", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          authenticated: true,
+          username: "puffmaster",
+          personalBest: 7,
+          scores: [{ rank: 0, username: "puffmaster", score: 45, mine: true }],
+        }),
+      });
+    });
+
+    await page.goto("/puffcade/puff-print-run");
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+    // The run still plays in local mode; the board reports the printer error.
+    await expect(game.getByText(/local run/i)).toBeVisible();
+
+    await game.getByRole("button", { name: /start the run/i }).click();
+    await expect(game.getByText("PAPER JAM", { exact: true })).toBeVisible({
+      timeout: 20000,
+    });
+    await expect(game.getByText("LOCKED", { exact: true })).toBeVisible();
+    await expect(
+      game.getByText(/score printer is offline/i),
+    ).toBeVisible();
+  });
+
+  test("queues a score finished during the board load and posts it once after auth resolves", async ({
+    page,
+  }) => {
+    await setGameSeed(page, POSITIVE_RUN_SEED);
+    // Hold the initial GET so a positive run can complete while the board is
+    // still loading; releasing it must trigger exactly one POST and a refresh.
+    let resolveGet: (() => void) | null = null;
+    let posts = 0;
+    await page.route("/api/puff/print-run/leaderboard", async (route) => {
+      if (route.request().method() === "POST") {
+        posts += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            authenticated: true,
+            username: "puffmaster",
+            personalBest: 10,
+            scores: [{ rank: 1, username: "puffmaster", score: 10, mine: true }],
+          }),
+        });
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        resolveGet = resolve;
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          authenticated: true,
+          username: "puffmaster",
+          personalBest: 0,
+          scores: [],
+        }),
+      });
+    });
+
+    await page.goto("/puffcade/puff-print-run");
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+
+    // The GET is held; a positive run completes while the board is loading.
+    const run = await positiveScoreJam(page);
+    expect(posts).toBe(0);
+
+    // Releasing the authenticated GET flushes the queued score exactly once.
+    resolveGet!();
+    await expect
+      .poll(() => posts, { timeout: 10000 })
+      .toBe(1);
+    // The board reflects the POST result: live, with the updated member row.
+    await expect(run.getByText("LIVE", { exact: true })).toBeVisible();
+    await expect(
+      run.getByRole("list", { name: /member leaderboard/i }),
+    ).toContainText("puffmaster");
+    expect(posts).toBe(1);
+  });
+
+  test("does not submit a queued score after leaving during the board load", async ({
+    page,
+  }) => {
+    await setGameSeed(page, POSITIVE_RUN_SEED);
+    let resolveGet: (() => void) | null = null;
+    let posts = 0;
+    await page.route("/api/puff/print-run/leaderboard", async (route) => {
+      if (route.request().method() === "POST") {
+        posts += 1;
+        await route.fulfill({ status: 204 });
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        resolveGet = resolve;
+      });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          authenticated: true,
+          username: "puffmaster",
+          personalBest: 0,
+          scores: [],
+        }),
+      });
+    });
+
+    await page.goto("/puffcade/puff-print-run");
+    const game = await positiveScoreJam(page);
+    expect(posts).toBe(0);
+
+    await game.getByRole("button", { name: /back to ham/i }).click();
+    await expect(page).toHaveURL(/\/puffcade$/);
+    resolveGet!();
+    await page.waitForTimeout(500);
+    expect(posts).toBe(0);
+  });
+
+  test("locks the board on a mid-run sign-out while keeping the local best", async ({
+    page,
+  }) => {
+    await setGameSeed(page, POSITIVE_RUN_SEED);
+    // GET reports an authenticated member; POST answers 401 so the board must
+    // drop to the signed-out/locked state without touching the local best.
+    await page.route("/api/puff/print-run/leaderboard", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 401,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "authentication_required" }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          authenticated: true,
+          username: "puffmaster",
+          personalBest: 45,
+          scores: [{ rank: 1, username: "puffmaster", score: 45, mine: true }],
+        }),
+      });
+    });
+
+    await page.goto("/puffcade/puff-print-run");
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game.getByText(/member: puffmaster/i)).toBeVisible();
+
+    const run = await positiveScoreJam(page);
+    // The 401 locks the board into the signed-out state…
+    await expect(run.getByText("LOCKED", { exact: true })).toBeVisible();
+    // …and the local run's best survives in the results card.
+    await expect(run.getByText(/best print:/i)).toContainText("10");
+  });
+
+  test("keeps the local best and restart after the member board save fails", async ({
+    page,
+  }) => {
+    await setGameSeed(page, POSITIVE_RUN_SEED);
+    // GET authenticates; POST 503s. The run keeps its local best, shows the
+    // non-blocking fallback, and stays replayable in live member mode.
+    await page.route("/api/puff/print-run/leaderboard", async (route) => {
+      if (route.request().method() === "POST") {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "service_unavailable" }),
+        });
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          authenticated: true,
+          username: "puffmaster",
+          personalBest: 45,
+          scores: [{ rank: 1, username: "puffmaster", score: 45, mine: true }],
+        }),
+      });
+    });
+
+    await page.goto("/puffcade/puff-print-run");
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game.getByText(/member: puffmaster/i)).toBeVisible();
+
+    const run = await positiveScoreJam(page);
+    // The fallback announcement reports a local save without locking the board.
+    await expect(run.getByText("LIVE", { exact: true })).toBeVisible();
+    await expect(
+      run.getByText(/score saved locally/i),
+    ).toBeVisible();
+    // localStorage kept the run's best; localStorage score is preserved.
+    expect(
+      await run.evaluate(() =>
+        window.localStorage.getItem("ham:puff-print-run:best:v1"),
+      ),
+    ).toBe("10");
+
+    // The game is still usable: restart begins a fresh run.
+    await run.getByRole("button", { name: /run it again/i }).click();
+    await expect(
+      run.getByText("PAPER JAM", { exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      run.getByRole("button", { name: /start the run/i }),
     ).toHaveCount(0);
   });
 });

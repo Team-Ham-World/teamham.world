@@ -229,8 +229,7 @@
 }
 
 .startCard,
-.pauseCard,
-.resultsCard {
+.pauseCard {
   width: min(30rem, 100%);
   padding: clamp(1rem, 3.5vw, 2rem);
   background: var(--color-surface);
@@ -238,6 +237,108 @@
   box-shadow: 8px 8px 0 var(--color-ink);
   transform: rotate(-0.35deg);
   animation: card-arrive 180ms steps(3, end) both;
+}
+
+.resultsCard {
+  display: grid;
+  grid-template-columns: minmax(11rem, 0.8fr) minmax(15rem, 1.2fr);
+  width: min(44rem, 100%);
+  max-height: 100%;
+  overflow: auto;
+  background: var(--color-surface);
+  border: 3px solid var(--color-ink);
+  box-shadow: 8px 8px 0 var(--color-ink);
+  transform: rotate(-0.35deg);
+  animation: card-arrive 180ms steps(3, end) both;
+}
+
+.scoreCard,
+.boardCard {
+  padding: clamp(0.9rem, 2.5vw, 1.5rem);
+}
+
+.scoreCard {
+  border-right: 3px solid var(--color-ink);
+  background:
+    linear-gradient(135deg, transparent 86%, rgb(217 54 37 / 16%) 86%),
+    var(--color-surface);
+}
+
+.boardCard {
+  min-width: 0;
+  background: var(--color-paper);
+}
+
+.boardHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 2px solid var(--color-ink);
+  font-size: clamp(0.58rem, 1.2vw, 0.72rem);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.boardHeading span {
+  padding: 0.14rem 0.35rem;
+  color: white;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 800;
+  background: var(--color-decorative-red);
+}
+
+.leaderboard {
+  display: grid;
+  gap: 0.24rem;
+  padding-left: 0;
+  margin-top: 0.55rem;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: clamp(0.7rem, 1.8vw, 0.85rem);
+}
+
+.leaderboard li {
+  display: grid;
+  grid-template-columns: 2.2rem minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: baseline;
+  padding: 0.3rem 0.35rem;
+  border-bottom: 1px dashed color-mix(in srgb, var(--color-ink) 40%, transparent);
+}
+
+.leaderboard li[data-mine] {
+  color: white;
+  background: var(--color-interactive-blue);
+  border-bottom-color: var(--color-interactive-blue);
+}
+
+.leaderboard strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboard b {
+  font-size: 1.05em;
+}
+
+.boardMessage {
+  margin-top: 0.9rem;
+  padding: 0.75rem;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  border-left: 4px solid var(--color-interactive-blue);
+  background: var(--color-surface);
+}
+
+.memberState {
+  color: var(--color-interactive-blue);
 }
 
 .startCard h3,
@@ -439,6 +540,68 @@
 }
 
 @media (any-pointer: coarse), (max-width: 40rem) {
+  /* On stacked mobile layouts the arena is short and wide, so the results
+     card must fit inside it and scroll within its own frame. The score
+     column keeps its essentials and the board trims to the top rows. */
+  .resultsCard {
+    grid-template-columns: 0.8fr 1.2fr;
+    width: 100%;
+    max-height: 100%;
+    transform: none;
+  }
+
+  .scoreCard {
+    border-right: 3px solid var(--color-ink);
+    border-bottom: 0;
+  }
+
+  .bigScore {
+    font-size: clamp(3rem, 16vw, 5.5rem);
+  }
+
+  .leaderboard li:nth-child(n + 5) {
+    display: none;
+  }
+
+  /* A card this short cannot hold the full-size score and two stacked
+     buttons alongside the board; compact the score half and keep the board
+     rows legible. Everything stays inside the card's own scroll frame. */
+  .resultsCard .bigScore {
+    font-size: clamp(2.4rem, 10vw, 3.4rem);
+    letter-spacing: -0.06em;
+    text-shadow: 3px 3px 0 var(--color-ink);
+  }
+
+  .resultsCard .primaryButton,
+  .resultsCard .secondaryButton {
+    min-height: 2.1rem;
+    padding: 0.32rem 0.55rem;
+    font-size: 0.64rem;
+    letter-spacing: 0.05em;
+  }
+
+  .resultsCard .eyebrow {
+    font-size: 0.56rem;
+  }
+
+  .resultsCard .scoreLabel {
+    margin-top: 0.3rem;
+  }
+
+  .resultsCard .bestLine {
+    margin-top: 0.45rem;
+    font-size: 0.64rem;
+  }
+
+  .resultsCard .buttonRow {
+    gap: 0.4rem;
+    margin-top: 0.55rem;
+  }
+
+  .resultsCard .newBestStamp {
+    margin-top: 0.4rem;
+  }
+
   /* Stack: the sheet takes the full width, the D-pad sits below it. The stage
      rows wrap their own content (the arena's height comes from its aspect
      ratio), so nothing strands dead paper between the board and the pad. */
@@ -451,6 +614,12 @@
   .controls {
     display: block;
     justify-self: center;
+  }
+
+  /* The member line keeps the HUD legible on narrow stacked layouts. */
+  .memberState {
+    flex-basis: 100%;
+    text-align: right;
   }
 
   /* The key hints repeat information the visible D-pad already carries;
@@ -483,7 +652,8 @@
 
   .startCard,
   .pauseCard,
-  .resultsCard {
+  .scoreCard,
+  .boardCard {
     padding: 0.75rem;
   }
 }
@@ -491,8 +661,13 @@
 /* Only genuinely short screens sacrifice the mechanic sentence; an ordinary
    390px phone has the vertical room to keep the rules on the card. */
 @media (max-height: 34rem) {
-  .startCard > p:not(.eyebrow) {
+  .startCard > p:not(.eyebrow),
+  .scoreLabel {
     display: none;
+  }
+
+  .resultsCard {
+    width: min(42rem, 100%);
   }
 }
 
