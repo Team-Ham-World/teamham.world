@@ -2,7 +2,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import PuffdlePage from "@/app/puffdle/page";
+import PuffdlePage from "@/app/puffcade/puffdle/page";
 import { PuffdleGame } from "@/components/puffdle/puffdle-game";
 import { PuffdleMascot } from "@/components/puffdle/puffdle-mascot";
 import { renderPuff } from "@/lib/puff/render";

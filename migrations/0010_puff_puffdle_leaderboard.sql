@@ -1,4 +1,4 @@
--- 0009_puff_puffdle_leaderboard.sql
+-- 0010_puff_puffdle_leaderboard.sql
 -- Applied manually by maintainer using neondb_owner
 
 CREATE TABLE public.puff_puffdle_scores (

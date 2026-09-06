@@ -73,7 +73,7 @@ export const PROJECTS: Project[] = [
     makers: [],
     featured: true,
     links: {
-      publicUrl: "/puffdle",
+      publicUrl: "/puffcade/puffdle",
     },
   },
   {

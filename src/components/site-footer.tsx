@@ -14,7 +14,7 @@ export function SiteFooter() {
         <p>teamham.world &#183; made by HAM</p>
         <nav aria-label="Legal" className="flex items-center gap-4 font-bold">
           <Link
-            href="/puffdle"
+            href="/puffcade/puffdle"
             className="text-interactive-blue underline decoration-2 underline-offset-4"
           >
             Puffdle

@@ -58,6 +58,31 @@ test.describe("Puffcade", () => {
     ).toHaveCount(0);
   });
 
+  test("opens Puffdle from the catalog and returns to Puffcade", async ({ page }) => {
+    await page.goto("/puffcade");
+    const card = page.getByRole("link", { name: "Play Puffdle", exact: true });
+    await expect(card).toHaveAttribute("href", "/puffcade/puffdle");
+    await card.click();
+    await expect(page).toHaveURL(/\/puffcade\/puffdle$/);
+    await expect(page.getByRole("heading", { name: "PUFFDLE", exact: true })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "DAILY PUFFDLE", exact: true })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tab", { name: "PUFFDLE UNLIMITED", exact: true }).click();
+    await expect(page.getByRole("tab", { name: "PUFFDLE UNLIMITED", exact: true })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("link", { name: "Back to Puffcade" }).click();
+    await expect(page).toHaveURL(/\/puffcade$/);
+  });
+
+  test("redirects the original Puffdle URL to its Puffcade route", async ({ page }) => {
+    await page.goto("/puffdle");
+    await expect(page).toHaveURL(/\/puffcade\/puffdle$/);
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href", "https://teamham.world/puffcade/puffdle",
+    );
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+      "content", "noindex, nofollow",
+    );
+  });
+
   test("serves Flappy Puff at its own route with metadata and fullscreen shell", async ({
     page,
   }) => {
