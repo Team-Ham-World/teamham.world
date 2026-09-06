@@ -23,6 +23,7 @@ import { usePuffdleDaily } from "./use-puffdle-daily";
 import { usePuffdleLeaderboard } from "./use-puffdle-leaderboard";
 
 import styles from "./puffdle-game.module.css";
+import { PuffdleCountdown } from "./puffdle-countdown";
 import { PuffdleMascot } from "./puffdle-mascot";
 
 const KEYBOARD_ROWS = [
@@ -328,6 +329,7 @@ export function PuffdleGame() {
               PUFFDLE UNLIMITED
             </button>
           </div>
+          {mode === "daily" && <PuffdleCountdown nextPuzzleAt={daily.nextPuzzleAt} onReset={refreshDaily} />}
         </header>
 
         {/* Toast message */}
@@ -653,6 +655,8 @@ export function PuffdleGame() {
                     [X]
                   </button>
                 </div>
+
+                {mode === "daily" && <PuffdleCountdown nextPuzzleAt={daily.nextPuzzleAt} />}
 
                 <div className={styles.outcomeStamp}>
                   <p
