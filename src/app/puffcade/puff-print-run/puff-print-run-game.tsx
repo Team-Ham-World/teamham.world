@@ -66,7 +66,6 @@ interface BoardLayout {
 
 const BEST_SCORE_KEY = "ham:puff-print-run:best:v1";
 const FRAME_MARGIN = 18;
-const DISPLAY_SYNCED_RENDER_CADENCE: PuffRenderCadence = { kind: "display" };
 const SNAKE_MONO =
   "700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const SNAKE_DISPLAY =
@@ -685,6 +684,8 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
     let viewHeight = 500;
     let needsRedraw = true;
     let lastDrawnPhase: GamePhase | null = null;
+    let renderCadence: PuffRenderCadence;
+    let sheetGrid = new Path2D();
 
     const drawBackground = (width: number, height: number) => {
       // Calm press-room wall: a flat paper-tinted slab inside a thin ink
@@ -731,7 +732,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
     };
 
     const drawSheet = () => {
-      const { x, y, width, height, cell } = layout;
+      const { x, y, width, height } = layout;
       // The offset ink "sill" doubles as the sheet's drop shadow.
       context.fillStyle = palette.ink;
       context.fillRect(x + 4, y + 4, width, height);
@@ -743,16 +744,7 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       context.strokeStyle = palette.blue;
       context.globalAlpha = 0.07;
       context.lineWidth = 1;
-      context.beginPath();
-      for (let lineY = y + cell + 0.5; lineY < y + height; lineY += cell) {
-        context.moveTo(x, lineY);
-        context.lineTo(x + width, lineY);
-      }
-      for (let lineX = x + cell + 0.5; lineX < x + width; lineX += cell) {
-        context.moveTo(lineX, y);
-        context.lineTo(lineX, y + height);
-      }
-      context.stroke();
+      context.stroke(sheetGrid);
       context.globalAlpha = 1;
 
       // Sheet outline.
@@ -1015,11 +1007,22 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
         coarsePointer,
       });
       const ratio = profile.pixelRatio;
+      renderCadence = profile.cadence;
       canvas.width = Math.max(1, Math.round(viewWidth * ratio));
       canvas.height = Math.max(1, Math.round(viewHeight * ratio));
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
       context.imageSmoothingEnabled = false;
       layout = boardLayout(viewWidth, viewHeight);
+      const { x, y, width, height, cell } = layout;
+      sheetGrid = new Path2D();
+      for (let lineY = y + cell + 0.5; lineY < y + height; lineY += cell) {
+        sheetGrid.moveTo(x, lineY);
+        sheetGrid.lineTo(x + width, lineY);
+      }
+      for (let lineX = x + cell + 0.5; lineX < x + width; lineX += cell) {
+        sheetGrid.moveTo(lineX, y);
+        sheetGrid.lineTo(lineX, y + height);
+      }
       if (!gameRef.current) {
         const fresh = createPuffSnake();
         gameRef.current = fresh;
@@ -1077,9 +1080,9 @@ export function PuffPrintRunGame({ exitHref }: Readonly<{ exitHref: string }>) {
       const renderStep = advancePuffRenderClock({
         accumulatorMs: renderAccumulatorMs,
         elapsedMs,
-        cadence: DISPLAY_SYNCED_RENDER_CADENCE,
-        phase: currentPhase,
-        forceDraw: needsRedraw || phaseChanged || proofFlashRef.current > 0,
+        cadence: renderCadence,
+        phase: proofFlashRef.current > 0 ? "playing" : currentPhase,
+        forceDraw: needsRedraw || phaseChanged,
         canDraw: Boolean(game),
       });
       renderAccumulatorMs = renderStep.accumulatorMs;

@@ -60,6 +60,12 @@ interface GateTextureAtlas {
   capTextHeight: number;
 }
 
+interface GroundTexture {
+  canvas: HTMLCanvasElement;
+  pixelRatio: number;
+  motifWidth: number;
+}
+
 const FIXED_STEP = 1 / 60;
 const MAX_FRAME_DELTA = 0.1;
 const MAX_CATCH_UP_STEPS = 5;
@@ -311,25 +317,56 @@ function drawGate(
   );
 }
 
+function buildGroundTexture(
+  arenaWidth: number,
+  pixelRatio: number,
+  palette: Palette,
+): GroundTexture | null {
+  const context = document.createElement("canvas").getContext("2d", { alpha: false });
+  if (!context) return null;
+  const font = "700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  const motif = "__/\\__HAM__";
+  context.font = font;
+  const motifWidth = context.measureText(motif).width;
+  const width = arenaWidth + motifWidth;
+  context.canvas.width = Math.ceil(width * pixelRatio);
+  context.canvas.height = Math.ceil(GROUND_HEIGHT * pixelRatio);
+  context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  context.fillStyle = palette.paper;
+  context.fillRect(
+    0,
+    0,
+    context.canvas.width / pixelRatio,
+    context.canvas.height / pixelRatio,
+  );
+  context.fillStyle = palette.red;
+  context.fillRect(0, 0, context.canvas.width / pixelRatio, 5);
+  context.fillStyle = palette.ink;
+  context.font = font;
+  context.textBaseline = "top";
+  for (let x = 0; x < width; x += motifWidth) {
+    context.fillText(motif, x, 12);
+  }
+  return { canvas: context.canvas, pixelRatio, motifWidth };
+}
+
 function drawGround(
   context: CanvasRenderingContext2D,
   state: PuffGameState,
-  palette: Palette,
+  ground: GroundTexture,
 ) {
-  const top = state.height - GROUND_HEIGHT;
-  context.fillStyle = palette.paper;
-  context.fillRect(0, top, state.width, GROUND_HEIGHT);
-  context.fillStyle = palette.red;
-  context.fillRect(0, top, state.width, 5);
-  context.fillStyle = palette.ink;
-  context.font = "700 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
-  context.textBaseline = "top";
-  const motif = "__/\\__HAM__";
-  const width = context.measureText(motif).width;
-  const offset = state.groundOffset % width;
-  for (let x = -offset; x < state.width + width; x += width) {
-    context.fillText(motif, x, top + 12);
-  }
+  const ratio = ground.pixelRatio;
+  context.drawImage(
+    ground.canvas,
+    (state.groundOffset % ground.motifWidth) * ratio,
+    0,
+    state.width * ratio,
+    GROUND_HEIGHT * ratio,
+    0,
+    state.height - GROUND_HEIGHT,
+    state.width,
+    GROUND_HEIGHT,
+  );
 }
 
 function drawBird(
@@ -368,6 +405,7 @@ function drawGame(
   state: PuffGameState,
   atlas: PuffSpriteAtlas,
   gates: GateTextureAtlas,
+  ground: GroundTexture,
   time: number,
 ) {
   drawBackground(context, state, atlas.palette);
@@ -375,7 +413,7 @@ function drawGame(
     if (gate.x + GATE_WIDTH + 8 < 0 || gate.x - 8 > state.width) continue;
     drawGate(context, state, atlas.palette, gates, gate);
   }
-  drawGround(context, state, atlas.palette);
+  drawGround(context, state, ground);
   drawBird(context, state, atlas, time);
 }
 
@@ -642,6 +680,7 @@ export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
 
     const atlas = buildPuffSpriteAtlas();
     let gates: GateTextureAtlas | null = null;
+    let ground: GroundTexture | null = null;
     let needsRedraw = true;
     let lastDrawnPhase: GamePhase | null = null;
     const coarsePointer =
@@ -670,6 +709,7 @@ export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
       if (!gates || gates.arenaHeight < height || gates.pixelRatio !== ratio) {
         gates = buildGateTextureAtlas(height, ratio, atlas.palette) ?? gates;
       }
+      ground = buildGroundTexture(width, ratio, atlas.palette);
       if (gameRef.current) resizePuffGame(gameRef.current, width, height);
       else gameRef.current = createPuffGame(width, height);
       needsRedraw = true;
@@ -717,11 +757,11 @@ export function FlappyPuffGame({ exitHref }: Readonly<{ exitHref: string }>) {
         cadence: renderProfile.cadence,
         phase: currentPhase,
         forceDraw: needsRedraw || phaseChanged,
-        canDraw: Boolean(game && gates),
+        canDraw: Boolean(game && gates && ground),
       });
       renderAccumulatorMs = renderStep.accumulatorMs;
-      if (game && gates && renderStep.shouldDraw) {
-        drawGame(context, game, atlas, gates, now);
+      if (game && gates && ground && renderStep.shouldDraw) {
+        drawGame(context, game, atlas, gates, ground, now);
         needsRedraw = false;
         lastDrawnPhase = currentPhase;
       }

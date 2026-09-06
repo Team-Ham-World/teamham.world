@@ -80,10 +80,11 @@ export function advancePuffRenderClock({
         nextAccumulatorMs + RENDER_EARLY_TOLERANCE_MS >= frameIntervalMs));
 
   if (shouldDraw && sceneIsMoving) {
+    // Missed renders are obsolete; keep only the fractional frame remainder.
     nextAccumulatorMs = Math.max(
       0,
       nextAccumulatorMs - frameIntervalMs,
-    );
+    ) % frameIntervalMs;
   }
 
   return { accumulatorMs: nextAccumulatorMs, shouldDraw };

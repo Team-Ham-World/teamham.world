@@ -100,11 +100,21 @@ test.describe("Puffcade", () => {
     ).toBe(true);
   });
 
-  test("renders only the ground motif as live gameplay text", async ({
+  test("renders gameplay from textures without live text rasterization", async ({
     page,
   }) => {
     await page.addInitScript(() => {
       const fillText = CanvasRenderingContext2D.prototype.fillText;
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      Reflect.set(CanvasRenderingContext2D.prototype, "drawImage", function (
+        this: CanvasRenderingContext2D,
+        ...args: unknown[]
+      ) {
+        if (this.canvas.isConnected) {
+          this.canvas.dataset.imageDraws = String(Number(this.canvas.dataset.imageDraws ?? 0) + 1);
+        }
+        return Reflect.apply(drawImage, this, args);
+      });
 
       Reflect.set(
         CanvasRenderingContext2D.prototype,
@@ -136,6 +146,7 @@ test.describe("Puffcade", () => {
     await page.evaluate(() => {
       for (const canvas of document.querySelectorAll("canvas")) {
         delete canvas.dataset.connectedFillTextCalls;
+        delete canvas.dataset.imageDraws;
       }
     });
     await game.getByRole("button", { name: /flap to start/i }).click();
@@ -164,8 +175,10 @@ test.describe("Puffcade", () => {
             .filter(Boolean),
         ),
     );
-    expect(calls.length).toBeGreaterThan(0);
-    expect(calls.every((text) => text === "__/\\__HAM__")).toBe(true);
+    expect(calls).toEqual([]);
+    expect(await game.locator("canvas").evaluate(
+      (canvas) => Number(canvas.dataset.imageDraws ?? 0),
+    )).toBeGreaterThan(0);
   });
 
   test("catalog Link opens the game and native Back returns to the catalog", async ({
@@ -308,6 +321,45 @@ test.describe("Puffcade", () => {
 test.describe("Puff Print Run", () => {
   test.beforeEach(async () => {
     await skipUnlessAppUp();
+  });
+
+  test("caps canvas drawing on a simulated 144 Hz display", async ({ page }) => {
+    await page.addInitScript(() => {
+      const requestFrame = window.requestAnimationFrame.bind(window);
+      let previousFrame = -1;
+      let clock = performance.now();
+      window.requestAnimationFrame = (callback) => requestFrame((timestamp) => {
+        if (timestamp !== previousFrame) {
+          previousFrame = timestamp;
+          clock += 1000 / 144;
+        }
+        callback(clock);
+      });
+      const fillRect = CanvasRenderingContext2D.prototype.fillRect;
+      CanvasRenderingContext2D.prototype.fillRect = function (x, y, width, height) {
+        if (this.canvas.isConnected && x === 0 && y === 0) {
+          this.canvas.dataset.backgroundDraws = String(
+            Number(this.canvas.dataset.backgroundDraws ?? 0) + 1,
+          );
+        }
+        return fillRect.call(this, x, y, width, height);
+      };
+    });
+    await page.goto("/puffcade/puff-print-run");
+    const game = await startRun(page);
+    const canvas = game.locator("canvas");
+    await expect.poll(async () => canvas.evaluate(
+      (element) => Number(element.dataset.backgroundDraws ?? 0),
+    )).toBeGreaterThan(0);
+    const draws = await canvas.evaluate(async (element) => {
+      const before = Number(element.dataset.backgroundDraws ?? 0);
+      for (let frame = 0; frame < 36; frame += 1) {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      }
+      return Number(element.dataset.backgroundDraws ?? 0) - before;
+    });
+    expect(draws).toBeGreaterThanOrEqual(14);
+    expect(draws).toBeLessThanOrEqual(16);
   });
 
   type E2EPage = import("@playwright/test").Page;

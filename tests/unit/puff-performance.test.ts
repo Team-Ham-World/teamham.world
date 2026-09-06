@@ -128,4 +128,21 @@ describe("Flappy Puff render profile", () => {
     expect(draws).toBe(144);
     expect(accumulatorMs).toBe(0);
   });
+
+  it("drops missed renders after a stall instead of drawing to catch up", () => {
+    const stalled = advancePuffRenderClock({
+      accumulatorMs: 0,
+      elapsedMs: 1000,
+      cadence: CAPPED_60_FPS,
+      phase: "playing",
+      forceDraw: false,
+      canDraw: true,
+    });
+
+    expect(stalled.shouldDraw).toBe(true);
+    expect(stalled.accumulatorMs).toBeLessThan(FRAME_INTERVAL_60_FPS);
+    const resumed = runRenderFrames(stalled.accumulatorMs, "playing", 120);
+    expect(resumed.draws).toBeGreaterThanOrEqual(60);
+    expect(resumed.draws).toBeLessThanOrEqual(61);
+  });
 });
