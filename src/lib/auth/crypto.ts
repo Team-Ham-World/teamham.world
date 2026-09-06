@@ -8,6 +8,7 @@ export interface OAuthStatePayload {
   verifier: string;
   issuedAt: number; // Unix timestamp in seconds
   returnTo: AllowedOAuthReturnTo | null;
+  gameAuthRequestHash: string | null;
 }
 
 const OAUTH_STATE_REGEX = /^[A-Za-z0-9_-]{22}$/;
@@ -87,6 +88,7 @@ export function signOAuthState(
     verifier: string;
     issuedAt: number;
     returnTo?: AllowedOAuthReturnTo | null;
+    gameAuthRequestHash?: string | null;
   },
   secret: string
 ): string {
@@ -103,12 +105,17 @@ export function signOAuthState(
   if (returnTo !== null && returnTo !== ALLOWED_OAUTH_RETURN_TO) {
     throw new Error('Invalid returnTo in payload');
   }
+  const gameAuthRequestHash = payload.gameAuthRequestHash ?? null;
+  if (returnTo === null ? gameAuthRequestHash !== null : !isValidTokenHash(gameAuthRequestHash)) {
+    throw new Error('Invalid game authorization binding in payload');
+  }
 
   const jsonStr = JSON.stringify({
     state: payload.state,
     verifier: payload.verifier,
     issuedAt: payload.issuedAt,
     returnTo,
+    gameAuthRequestHash,
   });
 
   const rawPayload = Buffer.from(jsonStr, 'utf8').toString('base64url');
@@ -163,7 +170,7 @@ export function verifyOAuthStateCookie(
     }
 
     const keys = Object.keys(parsed);
-    if (keys.length !== 4) {
+    if (keys.length !== 5) {
       return null;
     }
 
@@ -171,7 +178,8 @@ export function verifyOAuthStateCookie(
       !Object.prototype.hasOwnProperty.call(parsed, 'state') ||
       !Object.prototype.hasOwnProperty.call(parsed, 'verifier') ||
       !Object.prototype.hasOwnProperty.call(parsed, 'issuedAt') ||
-      !Object.prototype.hasOwnProperty.call(parsed, 'returnTo')
+      !Object.prototype.hasOwnProperty.call(parsed, 'returnTo') ||
+      !Object.prototype.hasOwnProperty.call(parsed, 'gameAuthRequestHash')
     ) {
       return null;
     }
@@ -191,6 +199,11 @@ export function verifyOAuthStateCookie(
     if (parsed.returnTo !== null && parsed.returnTo !== ALLOWED_OAUTH_RETURN_TO) {
       return null;
     }
+    if (parsed.returnTo === null
+      ? parsed.gameAuthRequestHash !== null
+      : !isValidTokenHash(parsed.gameAuthRequestHash)) {
+      return null;
+    }
 
     const now = Math.floor(Date.now() / 1000);
     // Reject materially future-issued timestamps (> 60 seconds)
@@ -208,6 +221,7 @@ export function verifyOAuthStateCookie(
       verifier: parsed.verifier,
       issuedAt: parsed.issuedAt,
       returnTo: parsed.returnTo,
+      gameAuthRequestHash: parsed.gameAuthRequestHash,
     };
   } catch {
     return null;

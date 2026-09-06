@@ -174,6 +174,7 @@ describe('lib/auth/crypto', () => {
         verifier: generatePkceVerifier(),
         issuedAt: nowSec,
         returnTo: null,
+        gameAuthRequestHash: null,
       };
 
       const signedCookie = signOAuthState(payload, TEST_SECRET_HEX);
@@ -193,11 +194,24 @@ describe('lib/auth/crypto', () => {
         verifier: generatePkceVerifier(),
         issuedAt: nowSec,
         returnTo: ALLOWED_OAUTH_RETURN_TO,
+        gameAuthRequestHash: 'a'.repeat(64),
       };
 
       const signedCookie = signOAuthState(payload, TEST_SECRET_HEX);
       const verified = verifyOAuthStateCookie(signedCookie, TEST_SECRET_HEX);
       expect(verified).toEqual(payload);
+      expect(signedCookie.length).toBeLessThanOrEqual(512);
+    });
+
+    it('rejects a resume state without a game request binding, including old signed cookies', () => {
+      const payload = {
+        state: generateOAuthState(), verifier: generatePkceVerifier(),
+        issuedAt: Math.floor(Date.now() / 1000), returnTo: ALLOWED_OAUTH_RETURN_TO,
+      };
+      expect(() => signOAuthState(payload, TEST_SECRET_HEX)).toThrow('Invalid game authorization binding');
+      const raw = Buffer.from(JSON.stringify(payload)).toString('base64url');
+      const signature = crypto.createHmac('sha256', Buffer.from(TEST_SECRET_HEX, 'hex')).update(raw).digest('base64url');
+      expect(verifyOAuthStateCookie(`${raw}.${signature}`, TEST_SECRET_HEX)).toBeNull();
     });
 
     it('rejects tampered payload', () => {
@@ -209,6 +223,7 @@ describe('lib/auth/crypto', () => {
         verifier: generatePkceVerifier(),
         issuedAt: nowSec,
         returnTo: null,
+        gameAuthRequestHash: null,
       };
 
       const signedCookie = signOAuthState(payload, TEST_SECRET_HEX);
@@ -233,6 +248,7 @@ describe('lib/auth/crypto', () => {
         verifier: generatePkceVerifier(),
         issuedAt: nowSec,
         returnTo: null,
+        gameAuthRequestHash: null,
       };
 
       const signedCookie = signOAuthState(payload, TEST_SECRET_HEX);
@@ -278,6 +294,7 @@ describe('lib/auth/crypto', () => {
         verifier: validVerifier,
         issuedAt: nowSec,
         returnTo: null,
+        gameAuthRequestHash: null,
         isAdmin: true,
       };
       const extraRaw = Buffer.from(JSON.stringify(extraPayload), 'utf8').toString('base64url');
@@ -297,6 +314,7 @@ describe('lib/auth/crypto', () => {
         verifier: validVerifier,
         issuedAt: 1700000000.5,
         returnTo: null,
+        gameAuthRequestHash: null,
       };
       const floatRaw = Buffer.from(JSON.stringify(floatPayload), 'utf8').toString('base64url');
       const floatSig = crypto.createHmac('sha256', key).update(floatRaw).digest('base64url');
@@ -323,6 +341,7 @@ describe('lib/auth/crypto', () => {
         verifier: generatePkceVerifier(),
         issuedAt: issuedTime,
         returnTo: null,
+        gameAuthRequestHash: null,
       };
       const cookie = signOAuthState(payload, TEST_SECRET_HEX);
 
@@ -348,6 +367,7 @@ describe('lib/auth/crypto', () => {
         verifier: generatePkceVerifier(),
         issuedAt: issuedTime + 60,
         returnTo: null,
+        gameAuthRequestHash: null,
       };
       const cookie60 = signOAuthState(payload60, TEST_SECRET_HEX);
       expect(verifyOAuthStateCookie(cookie60, TEST_SECRET_HEX)).toEqual(payload60);
@@ -358,6 +378,7 @@ describe('lib/auth/crypto', () => {
         verifier: generatePkceVerifier(),
         issuedAt: issuedTime + 61,
         returnTo: null,
+        gameAuthRequestHash: null,
       };
       const cookie61 = signOAuthState(payload61, TEST_SECRET_HEX);
       expect(verifyOAuthStateCookie(cookie61, TEST_SECRET_HEX)).toBeNull();

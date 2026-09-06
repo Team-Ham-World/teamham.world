@@ -16,7 +16,8 @@ import {
   GAME_AUTHORIZATION_COOKIE_NAME,
   getSingleCookieValue,
 } from '@/lib/auth/http';
-import { verifyGameAuthCookie } from '@/lib/auth/game-oauth';
+import { hashGameToken, verifyGameAuthCookie } from '@/lib/auth/game-oauth';
+import { DISCORD_OAUTH_SCOPES } from '@/lib/auth/discord';
 
 export async function GET(request: Request): Promise<Response> {
   let mode;
@@ -64,6 +65,7 @@ export async function GET(request: Request): Promise<Response> {
 
   // Validate return_to if present - only allow fixed allowlisted resume destination
   let boundReturnTo: AllowedOAuthReturnTo | null = null;
+  let gameAuthRequestHash: string | null = null;
   if (url.searchParams.has('return_to')) {
     const returnTo = url.searchParams.get('return_to');
     if (returnTo !== ALLOWED_OAUTH_RETURN_TO) {
@@ -97,6 +99,7 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
     boundReturnTo = ALLOWED_OAUTH_RETURN_TO;
+    gameAuthRequestHash = hashGameToken(pendingCookieRes.value);
   }
 
   const state = generateOAuthState();
@@ -110,6 +113,7 @@ export async function GET(request: Request): Promise<Response> {
       verifier,
       issuedAt,
       returnTo: boundReturnTo,
+      gameAuthRequestHash,
     },
     config.oauthStateHmacSecret
   );
@@ -118,14 +122,14 @@ export async function GET(request: Request): Promise<Response> {
   discordAuthUrl.searchParams.set('client_id', config.discordClientId);
   discordAuthUrl.searchParams.set('response_type', 'code');
   discordAuthUrl.searchParams.set('redirect_uri', config.redirectUri);
-  discordAuthUrl.searchParams.set('scope', 'identify guilds.members.read');
+  discordAuthUrl.searchParams.set('scope', DISCORD_OAUTH_SCOPES);
   discordAuthUrl.searchParams.set('state', state);
   discordAuthUrl.searchParams.set('code_challenge', challenge);
   discordAuthUrl.searchParams.set('code_challenge_method', 'S256');
   discordAuthUrl.searchParams.set('prompt', 'consent');
 
   const headers = new Headers();
-  applyProtectedHeaders(headers);
+  applyProtectedHeaders(headers, 'no-referrer');
   headers.set('Location', discordAuthUrl.toString());
   headers.append('Set-Cookie', buildOAuthStateCookie(signedState));
 

@@ -1,6 +1,6 @@
 import { getAuthConfig } from './config';
 import { getDbClient } from './db';
-import { isValidUuid } from './crypto';
+import { isValidDiscordUsername, isValidUuid } from './crypto';
 import {
   isValidGameAudience,
   isValidGameClientId,
@@ -24,6 +24,7 @@ export interface IssueGameAuthorizationCodeParams {
   codeHash: string;
   codeChallenge: string;
   sourceSessionHash: string;
+  redirectUri: string;
   databaseUrl?: string;
 }
 
@@ -66,6 +67,7 @@ export type IntrospectGameAccessTokenResult =
       clientId: string;
       audience: string;
       subject: string;
+      username: string | null;
       issuedAt: string | Date;
       expiresAt: string | Date;
     }
@@ -164,20 +166,21 @@ export async function authenticateGameClient(
 export async function issueGameAuthorizationCode(
   params: IssueGameAuthorizationCodeParams
 ): Promise<IssueGameAuthorizationCodeResult> {
-  const { accountId, clientId, codeHash, codeChallenge, sourceSessionHash, databaseUrl } = params;
+  const { accountId, clientId, codeHash, codeChallenge, sourceSessionHash, redirectUri, databaseUrl } = params;
+  const mode = getAuthConfig().mode;
 
   if (
     !isValidUuid(accountId) ||
     !isValidGameClientId(clientId) ||
     !isValidSha256Hex(codeHash) ||
     !isValidGamePkceChallenge(codeChallenge) ||
-    !isValidSha256Hex(sourceSessionHash)
+    !isValidSha256Hex(sourceSessionHash) ||
+    !isValidGameRedirectUri(redirectUri, mode)
   ) {
     throw new Error('Invalid input formats for game authorization code issuance');
   }
 
   const sql = getDbClient(databaseUrl);
-  const mode = getAuthConfig().mode;
 
   const rows = (await sql`
     WITH verified_session AS (
@@ -196,6 +199,7 @@ export async function issueGameAuthorizationCode(
         FROM public.game_oauth_clients
         WHERE client_id = ${clientId}
           AND enabled = true
+          AND redirect_uri = ${redirectUri}
     )
     INSERT INTO public.game_authorization_codes (
         account_id,
@@ -298,6 +302,7 @@ export async function exchangeGameAuthorizationCode(
         FROM public.game_oauth_clients
         WHERE client_id = ${authenticatedClientId}
           AND enabled = true
+          AND redirect_uri = ${redirectUri}
     ),
     consume_code AS (
         UPDATE public.game_authorization_codes gac
@@ -441,6 +446,7 @@ export async function introspectGameAccessToken(
         gat.client_id,
         gat.audience,
         sub.subject_id,
+        a.discord_username,
         gat.created_at,
         gat.expires_at
     FROM public.game_access_tokens gat
@@ -460,6 +466,7 @@ export async function introspectGameAccessToken(
     client_id: string;
     audience: string;
     subject_id: string;
+    discord_username: string | null;
     created_at: string | Date;
     expires_at: string | Date;
   }>;
@@ -478,6 +485,7 @@ export async function introspectGameAccessToken(
         clientId: row.client_id,
         audience: row.audience,
         subject: row.subject_id,
+        username: isValidDiscordUsername(row.discord_username) ? row.discord_username : null,
         issuedAt: row.created_at,
         expiresAt: row.expires_at,
       };

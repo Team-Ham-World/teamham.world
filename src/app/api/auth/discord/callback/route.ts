@@ -21,7 +21,7 @@ import {
   getSingleCookieValue,
   OAUTH_STATE_COOKIE_NAME,
 } from '@/lib/auth/http';
-import { verifyGameAuthCookie } from '@/lib/auth/game-oauth';
+import { hashGameToken, verifyGameAuthCookie } from '@/lib/auth/game-oauth';
 
 export async function GET(request: Request): Promise<Response> {
   let mode;
@@ -60,14 +60,10 @@ export async function GET(request: Request): Promise<Response> {
   // 1. Reject duplicate parameters using searchParams.getAll
   for (const key of Array.from(new Set(url.searchParams.keys()))) {
     if (url.searchParams.getAll(key).length > 1) {
-      const headers = new Headers();
-      headers.append('Set-Cookie', buildClearOAuthStateCookie());
-      headers.append('Set-Cookie', buildClearGameAuthCookie());
       return createAuthErrorResponse(
         400,
         'Invalid Request',
-        'Duplicate query parameters detected.',
-        headers
+        'Duplicate query parameters detected.'
       );
     }
   }
@@ -281,7 +277,7 @@ export async function GET(request: Request): Promise<Response> {
         config.gameAuthRequestHmacSecret,
         config.mode
       );
-      if (verifiedGamePayload) {
+      if (verifiedGamePayload && hashGameToken(gameAuthCookieRes.value) === statePayload.gameAuthRequestHash) {
         redirectLocation = ALLOWED_OAUTH_RETURN_TO;
         shouldClearGameCookie = false;
       }
@@ -290,7 +286,7 @@ export async function GET(request: Request): Promise<Response> {
 
   // Set session cookie, clear OAuth state cookie, handle pending game cookie, redirect 302
   const headers = new Headers();
-  applyProtectedHeaders(headers);
+  applyProtectedHeaders(headers, 'no-referrer');
   headers.set('Location', redirectLocation);
   headers.append('Set-Cookie', buildSessionCookie(sessionToken));
   headers.append('Set-Cookie', buildClearOAuthStateCookie());

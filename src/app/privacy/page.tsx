@@ -6,8 +6,8 @@ import {
   type LegalSection,
 } from "@/components/legal-document";
 
-const LAST_UPDATED = "August 25, 2026";
-const LAST_UPDATED_ISO = "2026-08-25";
+const LAST_UPDATED = "September 5, 2026";
+const LAST_UPDATED_ISO = "2026-09-05";
 
 export const metadata: Metadata = {
   title: "Privacy Policy — HAM",
@@ -202,7 +202,9 @@ const sections: LegalSection[] = [
         </ul>
         <p>
           A connected HAM game receives a game-specific pseudonymous subject ID
-          and authorization status, not your Discord ID or username. We may also
+          and authorization status, plus your Discord username for display when
+          available. Games do not receive your Discord user ID or Discord access
+          tokens. We may also
           disclose information when required by law or reasonably necessary to
           protect people, HAM, or the service.
         </p>

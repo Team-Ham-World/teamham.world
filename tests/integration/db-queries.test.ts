@@ -19,7 +19,19 @@
  * - Passwords, connection URLs, and connection host details are never logged or exposed.
  */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
+import { GET as authorizeGame } from '@/app/api/auth/game/authorize/route';
+import { GET as loginWithDiscord } from '@/app/api/auth/discord/login/route';
+import { GET as discordCallback } from '@/app/api/auth/discord/callback/route';
+import { GET as resumeGame } from '@/app/api/auth/game/authorize/resume/route';
+import { POST as exchangeGameCode } from '@/app/api/auth/game/token/route';
+import { POST as introspectGame } from '@/app/api/auth/game/introspect/route';
+import { POST as logout } from '@/app/api/auth/logout/route';
+import {
+  GAME_AUTHORIZATION_COOKIE_NAME,
+  OAUTH_STATE_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+} from '@/lib/auth/http';
 import { Pool, DatabaseError } from 'pg';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -39,6 +51,7 @@ import {
 import {
   generateGameClientSecret,
   generateGamePkce,
+  generateGameState,
   derivePkceChallenge,
   hashGameToken,
   generateGameAuthorizationCode,
@@ -3100,6 +3113,111 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       return { accountId: res.accountId, sessionHash, discordId };
     }
 
+    it('hands off Discord sign-in to a game username lookup and invalidates access on logout', async () => {
+      const client = await registerTestClient();
+      const { verifier, challenge } = generateGamePkce();
+      const gameState = generateGameState();
+      const origin = 'http://localhost:3000';
+      const cookieJar = new Map<string, string>();
+      const acceptCookies = (response: Response) => {
+        for (const header of response.headers.getSetCookie()) {
+          const pair = header.split(';')[0];
+          const separator = pair.indexOf('=');
+          const name = pair.slice(0, separator);
+          const value = pair.slice(separator + 1);
+          if (value) cookieJar.set(name, value);
+          else cookieJar.delete(name);
+        }
+      };
+      const browserRequest = (url: string) => new Request(new URL(url, origin), {
+        headers: { Cookie: [...cookieJar].map(([name, value]) => `${name}=${value}`).join('; ') },
+      });
+      const formRequest = (path: string, body: Record<string, string>) => new Request(`${origin}${path}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Basic ${Buffer.from(`${client.clientId}:${client.clientSecret}`).toString('base64')}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams(body),
+      });
+
+      const authorization = await authorizeGame(browserRequest(`/api/auth/game/authorize?${new URLSearchParams({
+        response_type: 'code', client_id: client.clientId, redirect_uri: client.redirectUri,
+        scope: 'identity', audience: client.audience, state: gameState,
+        code_challenge: challenge, code_challenge_method: 'S256',
+      })}`));
+      expect(authorization.status).toBe(302);
+      acceptCookies(authorization);
+      expect(cookieJar.has(GAME_AUTHORIZATION_COOKIE_NAME)).toBe(true);
+
+      const login = await loginWithDiscord(browserRequest(authorization.headers.get('location')!));
+      expect(login.status).toBe(302);
+      acceptCookies(login);
+      const discordUrl = new URL(login.headers.get('location')!);
+      expect(discordUrl.origin).toBe('https://discord.com');
+
+      const discordFetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+        const url = String(input);
+        if (url === 'https://discord.com/api/v10/oauth2/token') {
+          return Response.json({ access_token: 'test_discord_access_token', token_type: 'Bearer',
+            expires_in: 3600, scope: 'identify guilds.members.read' });
+        }
+        if (url === 'https://discord.com/api/v10/users/@me') {
+          return Response.json({ id: makeDiscordId(899), username: 'hamfriend' });
+        }
+        if (url === `https://discord.com/api/v10/users/@me/guilds/${process.env.DISCORD_GUILD_ID}/member`) {
+          return Response.json({ roles: [process.env.DISCORD_REQUIRED_ROLE_ID] });
+        }
+        throw new Error('Unexpected upstream request');
+      });
+      try {
+        const callback = await discordCallback(browserRequest(`/api/auth/discord/callback?${new URLSearchParams({
+          code: 'discord_test_code', state: discordUrl.searchParams.get('state')!,
+        })}`));
+        expect(callback.status).toBe(302);
+        expect(callback.headers.get('location')).toBe('/api/auth/game/authorize/resume');
+        expect(discordFetch).toHaveBeenCalledTimes(3);
+        acceptCookies(callback);
+      } finally {
+        discordFetch.mockRestore();
+      }
+      expect(cookieJar.has(SESSION_COOKIE_NAME)).toBe(true);
+      expect(cookieJar.has(OAUTH_STATE_COOKIE_NAME)).toBe(false);
+
+      const resumed = await resumeGame(browserRequest('/api/auth/game/authorize/resume'));
+      expect(resumed.status).toBe(302);
+      expect(resumed.headers.get('referrer-policy')).toBe('no-referrer');
+      acceptCookies(resumed);
+      expect(cookieJar.has(GAME_AUTHORIZATION_COOKIE_NAME)).toBe(false);
+      const gameCallback = new URL(resumed.headers.get('location')!);
+      expect(`${gameCallback.origin}${gameCallback.pathname}`).toBe(client.redirectUri);
+      expect(gameCallback.searchParams.get('state')).toBe(gameState);
+      expect(gameCallback.searchParams.get('iss')).toBe(origin);
+
+      const tokenResponse = await exchangeGameCode(formRequest('/api/auth/game/token', {
+        grant_type: 'authorization_code', code: gameCallback.searchParams.get('code')!,
+        redirect_uri: client.redirectUri, code_verifier: verifier,
+      }));
+      expect(tokenResponse.status).toBe(200);
+      const token = await tokenResponse.json();
+      const lookup = await introspectGame(formRequest('/api/auth/game/introspect', { token: token.access_token }));
+      expect(lookup.status).toBe(200);
+      expect(await lookup.json()).toEqual({
+        active: true, sub: token.sub, username: 'hamfriend', client_id: client.clientId,
+        aud: client.audience, iss: origin, exp: expect.any(Number), scope: 'identity', token_type: 'Bearer',
+      });
+
+      const logoutRequest = browserRequest('/api/auth/logout');
+      logoutRequest.headers.set('Origin', origin);
+      const loggedOut = await logout(new Request(logoutRequest, { method: 'POST' }));
+      expect(loggedOut.status).toBe(303);
+      acceptCookies(loggedOut);
+      expect(cookieJar.size).toBe(0);
+      const afterLogout = await introspectGame(formRequest('/api/auth/game/introspect', { token: token.access_token }));
+      expect(afterLogout.status).toBe(200);
+      expect(await afterLogout.json()).toEqual({ active: false });
+    });
+
     it('getGameOAuthClient and authenticateGameClient handle enabled, disabled, and unknown clients', async () => {
       const client = await registerTestClient('chess_game', true);
       const disabledClient = await registerTestClient('disabled_game', false);
@@ -3148,6 +3266,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       const issueRes1 = await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash: codeHash1,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3178,6 +3297,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       const issueRes2 = await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash: codeHash2,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3196,12 +3316,42 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       const badSessionRes = await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash: makeCodeHash('9'),
         codeChallenge: challenge,
         sourceSessionHash: makeTokenHash('9'),
         databaseUrl: runtimeUrl,
       });
       expect(badSessionRes).toEqual({ success: false, reason: 'session_invalid' });
+    });
+
+    it('rechecks the requested redirect in SQL when client configuration changes', async () => {
+      const client = await registerTestClient();
+      const session = await createMemberSession(815);
+      const { challenge } = generateGamePkce();
+      const codeHash = hashGameToken(generateGameAuthorizationCode());
+      const newRedirect = 'https://poker-game.teamham.world/auth/new-callback';
+      const issuance = {
+        accountId: session.accountId, clientId: client.clientId, codeHash,
+        codeChallenge: challenge, sourceSessionHash: session.sessionHash,
+        redirectUri: client.redirectUri, databaseUrl: runtimeUrl,
+      };
+
+      // Simulate a registry change after the route's client lookup.
+      await ownerPool.query('UPDATE public.game_oauth_clients SET redirect_uri = $1 WHERE client_id = $2', [newRedirect, client.clientId]);
+      expect((await issueGameAuthorizationCode(issuance)).success).toBe(false);
+      expect((await runtimePool.query('SELECT code_hash FROM public.game_authorization_codes')).rowCount).toBe(0);
+      expect((await issueGameAuthorizationCode({ ...issuance, redirectUri: newRedirect })).success).toBe(true);
+
+      // Exchange also rechecks the current registration, not just the code's copy.
+      await ownerPool.query('UPDATE public.game_oauth_clients SET redirect_uri = $1 WHERE client_id = $2', [client.redirectUri, client.clientId]);
+      const exchange = await exchangeGameAuthorizationCode({
+        authenticatedClientId: client.clientId, codeHash, redirectUri: newRedirect,
+        computedCodeChallenge: challenge, newTokenHash: hashGameToken(generateGameAccessToken()),
+        databaseUrl: runtimeUrl,
+      });
+      expect(exchange).toEqual({ success: false, reason: 'invalid_grant' });
+      expect((await runtimePool.query('SELECT token_hash FROM public.game_access_tokens')).rowCount).toBe(0);
     });
 
     it('exchangeGameAuthorizationCode consumes code atomically, creates stable pairwise subject, and issues token', async () => {
@@ -3215,6 +3365,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3263,6 +3414,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash: codeHash2,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3291,6 +3443,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: clientB.clientId,
+        redirectUri: clientB.redirectUri,
         codeHash: codeHashB,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3324,6 +3477,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3395,6 +3549,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3460,6 +3615,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3537,6 +3693,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3576,6 +3733,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
@@ -3604,7 +3762,14 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       if (introspectRes.active) {
         expect(introspectRes.clientId).toBe(client.clientId);
         expect(introspectRes.audience).toBe(client.audience);
+        expect(introspectRes.username).toBeNull();
       }
+
+      await ownerPool.query('UPDATE public.accounts SET discord_username = $1 WHERE id = $2', ['hamfriend', session.accountId]);
+      const withUsername = await introspectGameAccessToken({
+        authenticatedClientId: client.clientId, tokenHash, databaseUrl: runtimeUrl,
+      });
+      expect(withUsername).toEqual({ ...introspectRes, username: 'hamfriend' });
 
       // 2. Client isolation: introspection by different client returns inactive
       const otherClient = await registerTestClient('chess_game', true);
@@ -3637,6 +3802,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       await issueGameAuthorizationCode({
         accountId: session.accountId,
         clientId: client.clientId,
+        redirectUri: client.redirectUri,
         codeHash,
         codeChallenge: challenge,
         sourceSessionHash: session.sessionHash,
