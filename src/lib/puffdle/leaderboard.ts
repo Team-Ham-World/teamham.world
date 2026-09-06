@@ -72,10 +72,11 @@ export async function savePuffdleScore(
       END,
       max_streak = GREATEST(puff_puffdle_scores.max_streak, EXCLUDED.max_streak),
       achieved_at = CASE
-        WHEN EXCLUDED.high_score > puff_puffdle_scores.high_score THEN NOW()
+        WHEN EXCLUDED.high_score > puff_puffdle_scores.high_score
+          THEN GREATEST(NOW(), puff_puffdle_scores.updated_at)
         ELSE puff_puffdle_scores.achieved_at
       END,
-      updated_at = NOW()
+      updated_at = GREATEST(NOW(), puff_puffdle_scores.updated_at)
     RETURNING high_score, games_played, games_won, current_streak, max_streak;
   `) as Array<{
     high_score: unknown;

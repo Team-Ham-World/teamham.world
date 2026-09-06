@@ -4346,6 +4346,24 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       expect((await getPuffdleLeaderboard(accountId, runtimeUrl)).personalBest).toBe(600);
     });
 
+    it('keeps timestamps monotonic when the stored row is newer than the transaction clock', async () => {
+      const accountId = await member(1502);
+      await savePuffdleScore(accountId, { score: 500 }, runtimeUrl);
+      // NOW() is the transaction start time. A concurrent transaction can
+      // commit a newer row before an older transaction acquires its row lock.
+      const stored = await ownerPool.query(
+        `UPDATE public.puff_puffdle_scores
+         SET achieved_at = NOW() + INTERVAL '1 minute', updated_at = NOW() + INTERVAL '1 minute'
+         WHERE account_id = $1 RETURNING achieved_at, updated_at`, [accountId],
+      );
+      await savePuffdleScore(accountId, { score: 200 }, runtimeUrl);
+      const tied = await ownerPool.query('SELECT achieved_at, updated_at FROM public.puff_puffdle_scores WHERE account_id = $1', [accountId]);
+      expect(tied.rows[0]).toEqual(stored.rows[0]);
+      await savePuffdleScore(accountId, { score: 600 }, runtimeUrl);
+      const improved = await ownerPool.query('SELECT high_score, achieved_at, updated_at FROM public.puff_puffdle_scores WHERE account_id = $1', [accountId]);
+      expect(improved.rows[0]).toEqual({ high_score: 600, ...stored.rows[0] });
+    });
+
     it('sorts ties deterministically, hides ineligible accounts and limits the board to ten', async () => {
       const accounts = [];
       for (let i = 0; i < 12; i++) {
