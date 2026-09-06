@@ -66,6 +66,27 @@ const GAME_LISTINGS: PuffcadeGameListing[] = [
       view: { yaw: 0.18, pitch: 0.1 },
     },
   },
+  {
+    title: "Puffdle",
+    href: "/puffcade/puffdle",
+    detail: "Word puzzle · Daily + unlimited",
+    description:
+      "Decode a five-letter word in six guesses. Solve the daily puzzle or keep playing in unlimited mode.",
+    art: {
+      cols: 42,
+      rows: 28,
+      cellAspect: 0.6 / 0.74,
+      pose: {
+        time: 0.8,
+        bob: 0,
+        squash: 0,
+        blink: 1,
+        gazeX: -0.08,
+        gazeY: -0.04,
+      },
+      view: { yaw: -0.28, pitch: 0.06 },
+    },
+  },
 ];
 
 function PuffcadeGameCard({ listing }: Readonly<{ listing: PuffcadeGameListing }>) {
