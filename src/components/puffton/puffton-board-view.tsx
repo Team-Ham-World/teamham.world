@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo } from "react";
+import React, { useMemo, useState } from "react";
 import {
   hexToPixel,
   vertexToPixel,
@@ -14,9 +14,12 @@ import {
   type HexTerrain,
   type PufftonGameState,
 } from "@/lib/puffton/types";
+import { BanditPuff } from "./bandit-puff";
+import type { BuildMode } from "./puffton-live-banner";
 
 interface PufftonBoardViewProps {
   gameState: PufftonGameState;
+  activeBuildMode?: BuildMode;
   onVertexClick?: (vertexId: string) => void;
   onEdgeClick?: (edgeId: string) => void;
   onTileClick?: (tileId: string) => void;
@@ -89,6 +92,7 @@ function getPipDots(num: number | null): string {
 
 export function PufftonBoardView({
   gameState,
+  activeBuildMode = null,
   onVertexClick,
   onEdgeClick,
   onTileClick,
@@ -97,6 +101,10 @@ export function PufftonBoardView({
 }: PufftonBoardViewProps) {
   const { board, players, activePlayerIndex, phase } = gameState;
   const activePlayer = players[activePlayerIndex];
+  const humanPlayer = players.find((p) => !p.isBot) || players[0];
+  const isHumanTurn = activePlayer?.id === humanPlayer.id;
+
+  const [hoveredTileId, setHoveredTileId] = useState<string | null>(null);
 
   // Calculate ViewBox bounds
   const { minX, minY, width, height } = useMemo(() => {
@@ -117,7 +125,7 @@ export function PufftonBoardView({
       return { minX: -300, minY: -300, width: 600, height: 600 };
     }
 
-    const padding = 60;
+    const padding = 65;
     return {
       minX: minx - padding,
       minY: miny - padding,
@@ -132,20 +140,25 @@ export function PufftonBoardView({
     if (!activePlayer || activePlayer.isBot) return slots;
 
     if (phase === "setup_round_1" || phase === "setup_round_2") {
-      for (const [vId] of Object.entries(board.vertices)) {
-        if (satisfiesDistanceRule(vId, board)) {
-          slots.add(vId);
+      // In step 1 (no selected vertex yet), any vertex obeying distance rule is valid
+      if (!selectedVertexId) {
+        for (const [vId] of Object.entries(board.vertices)) {
+          if (satisfiesDistanceRule(vId, board)) {
+            slots.add(vId);
+          }
         }
       }
     } else if (phase === "action") {
-      // Check settlement spots
-      if (
+      // Check settlement spots (if in settlement mode or general mode with resources)
+      const canBuildSettlement =
+        (activeBuildMode === "settlement" || activeBuildMode === null) &&
         activePlayer.settlementsLeft > 0 &&
         activePlayer.resources.brick >= 1 &&
         activePlayer.resources.timber >= 1 &&
         activePlayer.resources.paper >= 1 &&
-        activePlayer.resources.feed >= 1
-      ) {
+        activePlayer.resources.feed >= 1;
+
+      if (canBuildSettlement) {
         for (const [vId, v] of Object.entries(board.vertices)) {
           if (satisfiesDistanceRule(vId, board)) {
             const connected = v.adjacentEdges.some(
@@ -156,12 +169,14 @@ export function PufftonBoardView({
         }
       }
 
-      // Check city upgrade spots
-      if (
+      // Check city upgrade spots (if in city mode or general mode with resources)
+      const canBuildCity =
+        (activeBuildMode === "city" || activeBuildMode === null) &&
         activePlayer.citiesLeft > 0 &&
         activePlayer.resources.toner >= 3 &&
-        activePlayer.resources.paper >= 2
-      ) {
+        activePlayer.resources.paper >= 2;
+
+      if (canBuildCity) {
         for (const [vId, b] of Object.entries(board.buildings)) {
           if (b.playerId === activePlayer.id && b.type === "settlement") {
             slots.add(vId);
@@ -171,7 +186,7 @@ export function PufftonBoardView({
     }
 
     return slots;
-  }, [board, activePlayer, phase]);
+  }, [board, activePlayer, phase, selectedVertexId, activeBuildMode]);
 
   // Determine valid edge slots for active player
   const validEdgeSlots = useMemo(() => {
@@ -191,31 +206,53 @@ export function PufftonBoardView({
           if (!board.roads[eId]) slots.add(eId);
         }
       }
-    } else if ((phase === "action" && canAffordRoad) || isFreeRoad) {
-      if (activePlayer.roadsLeft > 0) {
-        for (const [eId] of Object.entries(board.edges)) {
-          if (canBuildRoad(activePlayer.id, eId, board, false)) {
-            slots.add(eId);
-          }
+    } else if (
+      ((phase === "action" && (activeBuildMode === "road" || activeBuildMode === null) && canAffordRoad) ||
+        isFreeRoad) &&
+      activePlayer.roadsLeft > 0
+    ) {
+      for (const [eId] of Object.entries(board.edges)) {
+        if (canBuildRoad(activePlayer.id, eId, board, false)) {
+          slots.add(eId);
         }
       }
     }
 
     return slots;
-  }, [board, activePlayer, phase, selectedVertexId]);
+  }, [board, activePlayer, phase, selectedVertexId, activeBuildMode]);
 
   return (
-    <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border-4 border-ink bg-[#bae6fd] p-2 shadow-[6px_6px_0px_#121212] sm:p-4">
+    <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl border-4 border-ink bg-[#a5f3fc] p-2 shadow-[6px_6px_0px_#121212] sm:p-4">
+      {/* Water background subtle grid pattern */}
       <svg
         viewBox={`${minX} ${minY} ${width} ${height}`}
-        className="h-auto max-h-[640px] w-full select-none"
-        style={{ filter: "drop-shadow(0 4px 6px rgba(0,0,0,0.15))" }}
+        className="h-auto max-h-[660px] w-full select-none"
+        style={{ filter: "drop-shadow(0 4px 8px rgba(0,0,0,0.18))" }}
       >
         <defs>
           <filter id="inkShadow" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="2" dy="2" stdDeviation="0" floodColor="#121212" />
           </filter>
+          <filter id="goldGlow" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#f59e0b" />
+          </filter>
+          <filter id="emeraldGlow" x="-30%" y="-30%" width="160%" height="160%">
+            <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor="#10b981" />
+          </filter>
+          <pattern id="waterWave" width="20" height="20" patternUnits="userSpaceOnUse">
+            <path d="M 0 10 Q 5 5, 10 10 T 20 10" fill="none" stroke="#38bdf8" strokeWidth="1.5" opacity="0.35" />
+          </pattern>
         </defs>
+
+        {/* Ocean Background Fill */}
+        <rect
+          x={minX}
+          y={minY}
+          width={width}
+          height={height}
+          fill="url(#waterWave)"
+          className="pointer-events-none"
+        />
 
         {/* 1. Hex Tiles Layer */}
         <g id="hex-tiles">
@@ -223,9 +260,10 @@ export function PufftonBoardView({
             const center = hexToPixel(tile.q, tile.r, HEX_SIZE);
             const style = TERRAIN_STYLES[tile.terrain] || TERRAIN_STYLES.desert;
             const isRobberHere = board.robberTileId === tile.id;
-            const isRobberPhase = phase === "robber";
+            const isRobberPhase = phase === "robber" && isHumanTurn;
+            const isHovered = hoveredTileId === tile.id;
 
-            // Compute 6 corners
+            // Compute 6 corners of pointy-topped hex
             const points = [0, 60, 120, 180, 240, 300]
               .map((angle) => {
                 const rad = ((angle - 90) * Math.PI) / 180;
@@ -241,15 +279,18 @@ export function PufftonBoardView({
                     onTileClick(tile.id);
                   }
                 }}
-                className={isRobberPhase ? "cursor-pointer transition-transform hover:opacity-90" : ""}
+                onMouseEnter={() => isRobberPhase && setHoveredTileId(tile.id)}
+                onMouseLeave={() => isRobberPhase && setHoveredTileId(null)}
+                className={isRobberPhase ? "cursor-pointer transition-transform hover:scale-[1.01]" : ""}
               >
                 {/* Hex Polygon */}
                 <polygon
                   points={points}
                   fill={style.bg}
-                  stroke="#121212"
-                  strokeWidth="3.5"
+                  stroke={isRobberPhase && isHovered ? "#ef4444" : "#121212"}
+                  strokeWidth={isRobberPhase && isHovered ? "4.5" : "3.5"}
                   strokeLinejoin="round"
+                  filter={isRobberPhase && isHovered ? "url(#goldGlow)" : undefined}
                 />
 
                 {/* Terrain Pattern / Icon */}
@@ -266,7 +307,7 @@ export function PufftonBoardView({
 
                 {/* Number Token */}
                 {tile.diceNumber && (
-                  <g transform={`translate(${center.x}, ${center.y + 14})`}>
+                  <g transform={`translate(${center.x}, ${center.y + 14})`} style={{ pointerEvents: "none" }}>
                     <circle
                       r="16"
                       fill="#fffdfa"
@@ -288,6 +329,7 @@ export function PufftonBoardView({
                     <text
                       y="10"
                       textAnchor="middle"
+                      dominantBaseline="central"
                       fontFamily="monospace"
                       fontWeight="900"
                       fontSize="8"
@@ -298,19 +340,14 @@ export function PufftonBoardView({
                   </g>
                 )}
 
-                {/* Robber / Toner Bandit */}
+                {/* Robber / Bandit Puff */}
                 {isRobberHere && (
-                  <g transform={`translate(${center.x}, ${center.y})`}>
-                    <circle r="22" fill="#18181b" stroke="#facc15" strokeWidth="3" />
-                    <text
-                      y="2"
-                      textAnchor="middle"
-                      dominantBaseline="central"
-                      fontSize="16"
-                    >
-                      🦹
-                    </text>
-                  </g>
+                  <BanditPuff x={center.x} y={center.y} size={48} />
+                )}
+
+                {/* Ghost Bandit Puff preview when hovering tile during robber phase */}
+                {isRobberPhase && isHovered && !isRobberHere && (
+                  <BanditPuff x={center.x} y={center.y} size={48} isGhost={true} />
                 )}
               </g>
             );
@@ -318,7 +355,7 @@ export function PufftonBoardView({
         </g>
 
         {/* 2. Ports Layer */}
-        <g id="ports">
+        <g id="ports" className="pointer-events-none">
           {Object.values(board.vertices)
             .filter((v) => !!v.port)
             .map((v) => {
@@ -335,7 +372,7 @@ export function PufftonBoardView({
                     height="14"
                     rx="3"
                     fill="#121212"
-                    opacity="0.85"
+                    opacity="0.9"
                   />
                   <text
                     y="-11"
@@ -373,39 +410,79 @@ export function PufftonBoardView({
               const color = pal?.primary || "#121212";
 
               return (
-                <line
-                  key={edge.id}
-                  x1={p1.x}
-                  y1={p1.y}
-                  x2={p2.x}
-                  y2={p2.y}
-                  stroke={color}
-                  strokeWidth="7"
-                  strokeLinecap="round"
-                  style={{ filter: "drop-shadow(1px 1px 0px #121212)" }}
-                />
+                <g key={edge.id}>
+                  {/* Road Border Shadow */}
+                  <line
+                    x1={p1.x}
+                    y1={p1.y}
+                    x2={p2.x}
+                    y2={p2.y}
+                    stroke="#121212"
+                    strokeWidth="11"
+                    strokeLinecap="round"
+                  />
+                  {/* Road Body */}
+                  <line
+                    x1={p1.x}
+                    y1={p1.y}
+                    x2={p2.x}
+                    y2={p2.y}
+                    stroke={color}
+                    strokeWidth="7"
+                    strokeLinecap="round"
+                  />
+                </g>
               );
             }
 
-            if (isValidSlot) {
-              return (
-                <line
-                  key={edge.id}
-                  x1={p1.x}
-                  y1={p1.y}
-                  x2={p2.x}
-                  y2={p2.y}
-                  stroke={isSelected ? "#f59e0b" : "#ffffff"}
-                  strokeWidth="8"
-                  strokeDasharray="4 4"
-                  strokeLinecap="round"
-                  className="cursor-pointer transition-all hover:stroke-[#f59e0b] hover:stroke-width-[10]"
-                  onClick={() => onEdgeClick && onEdgeClick(edge.id)}
-                />
-              );
-            }
+            return (
+              <g key={edge.id}>
+                {/* Visual Indicator for Valid Slots */}
+                {isValidSlot && (
+                  <>
+                    {/* Glowing underlay */}
+                    <line
+                      x1={p1.x}
+                      y1={p1.y}
+                      x2={p2.x}
+                      y2={p2.y}
+                      stroke="#f59e0b"
+                      strokeWidth="12"
+                      strokeLinecap="round"
+                      opacity="0.6"
+                      filter="url(#goldGlow)"
+                    />
+                    {/* Dashed action line */}
+                    <line
+                      x1={p1.x}
+                      y1={p1.y}
+                      x2={p2.x}
+                      y2={p2.y}
+                      stroke={isSelected ? "#f59e0b" : "#ffffff"}
+                      strokeWidth="8"
+                      strokeDasharray="5 4"
+                      strokeLinecap="round"
+                      className="pointer-events-none"
+                    />
+                  </>
+                )}
 
-            return null;
+                {/* Generous Invisible Click Hitbox (26px width) */}
+                {isHumanTurn && (
+                  <line
+                    x1={p1.x}
+                    y1={p1.y}
+                    x2={p2.x}
+                    y2={p2.y}
+                    stroke="transparent"
+                    strokeWidth="26"
+                    strokeLinecap="round"
+                    className="cursor-pointer"
+                    onClick={() => onEdgeClick && onEdgeClick(edge.id)}
+                  />
+                )}
+              </g>
+            );
           })}
         </g>
 
@@ -428,35 +505,39 @@ export function PufftonBoardView({
                   <g
                     key={vertex.id}
                     transform={`translate(${pos.x}, ${pos.y})`}
-                    onClick={() => isValidSlot && onVertexClick && onVertexClick(vertex.id)}
-                    className={isValidSlot ? "cursor-pointer" : ""}
+                    onClick={() => isHumanTurn && onVertexClick && onVertexClick(vertex.id)}
+                    className={isHumanTurn ? "cursor-pointer" : ""}
                   >
                     <rect
-                      x="-12"
-                      y="-12"
-                      width="24"
-                      height="24"
+                      x="-14"
+                      y="-14"
+                      width="28"
+                      height="28"
                       fill={color}
                       stroke="#121212"
-                      strokeWidth="2.5"
+                      strokeWidth="3"
                       rx="4"
                       filter="url(#inkShadow)"
                     />
                     <polygon
-                      points="-12,-12 -6,-18 0,-12 6,-18 12,-12"
+                      points="-14,-14 -7,-20 0,-14 7,-20 14,-14"
                       fill={color}
                       stroke="#121212"
-                      strokeWidth="2"
+                      strokeWidth="2.5"
                     />
                     <text
                       y="1"
                       textAnchor="middle"
                       dominantBaseline="central"
-                      fontSize="11"
+                      fontFamily="monospace"
+                      fontWeight="900"
+                      fontSize="12"
                       fill="#ffffff"
                     >
                       HQ
                     </text>
+                    {/* Generous Hitbox */}
+                    <circle r="20" fill="transparent" />
                   </g>
                 );
               }
@@ -466,42 +547,94 @@ export function PufftonBoardView({
                 <g
                   key={vertex.id}
                   transform={`translate(${pos.x}, ${pos.y})`}
-                  onClick={() => isValidSlot && onVertexClick && onVertexClick(vertex.id)}
-                  className={isValidSlot ? "cursor-pointer" : ""}
+                  onClick={() => isHumanTurn && onVertexClick && onVertexClick(vertex.id)}
+                  className={isHumanTurn ? "cursor-pointer" : ""}
                 >
+                  {/* Upgradable highlight if in city mode or can upgrade */}
+                  {isValidSlot && activeBuildMode === "city" && (
+                    <circle
+                      r="18"
+                      fill="none"
+                      stroke="#f59e0b"
+                      strokeWidth="3"
+                      strokeDasharray="3 3"
+                      filter="url(#goldGlow)"
+                    />
+                  )}
+
                   <polygon
-                    points="0,-14 11,-4 11,10 -11,10 -11,-4"
+                    points="0,-16 13,-4 13,12 -13,12 -13,-4"
                     fill={color}
                     stroke="#121212"
-                    strokeWidth="2.5"
+                    strokeWidth="3"
                     filter="url(#inkShadow)"
                   />
-                  <circle r="3" fill="#ffffff" cy="2" />
+                  <circle r="3.5" fill="#ffffff" cy="3" />
+                  {/* Generous Hitbox */}
+                  <circle r="20" fill="transparent" />
                 </g>
               );
             }
 
-            if (isValidSlot) {
-              return (
-                <g
-                  key={vertex.id}
-                  transform={`translate(${pos.x}, ${pos.y})`}
-                  onClick={() => onVertexClick && onVertexClick(vertex.id)}
-                  className="cursor-pointer transition-transform hover:scale-125"
-                >
-                  <circle
-                    r={isSelected ? "11" : "8"}
-                    fill={isSelected ? "#f59e0b" : "#ffffff"}
-                    stroke="#121212"
-                    strokeWidth="2.5"
-                    strokeDasharray="2 2"
-                    filter="url(#inkShadow)"
-                  />
-                </g>
-              );
-            }
+            // Unoccupied Vertex Slot
+            return (
+              <g
+                key={vertex.id}
+                transform={`translate(${pos.x}, ${pos.y})`}
+                onClick={() => isHumanTurn && onVertexClick && onVertexClick(vertex.id)}
+                className={isHumanTurn ? "cursor-pointer" : ""}
+              >
+                {/* Visual Indicator for Selected / Valid Slots */}
+                {isSelected ? (
+                  <g>
+                    {/* Flashing Beacon for Selected Hamlet in Setup */}
+                    <circle
+                      r="16"
+                      fill="#f59e0b"
+                      opacity="0.4"
+                      filter="url(#goldGlow)"
+                    />
+                    <circle
+                      r="12"
+                      fill="#fbbf24"
+                      stroke="#121212"
+                      strokeWidth="3"
+                      filter="url(#inkShadow)"
+                    />
+                    <text
+                      y="0"
+                      textAnchor="middle"
+                      dominantBaseline="central"
+                      fontSize="10"
+                    >
+                      🏠
+                    </text>
+                  </g>
+                ) : isValidSlot ? (
+                  <g className="transition-transform hover:scale-125">
+                    {/* Glowing outer aura */}
+                    <circle
+                      r="12"
+                      fill="#ffffff"
+                      opacity="0.5"
+                      filter="url(#emeraldGlow)"
+                    />
+                    {/* Inner dashed ring */}
+                    <circle
+                      r="9"
+                      fill="#ffffff"
+                      stroke="#121212"
+                      strokeWidth="2.5"
+                      strokeDasharray="3 2"
+                      filter="url(#inkShadow)"
+                    />
+                  </g>
+                ) : null}
 
-            return null;
+                {/* Generous Invisible Click Hitbox (r=20) */}
+                {isHumanTurn && <circle r="20" fill="transparent" />}
+              </g>
+            );
           })}
         </g>
       </svg>

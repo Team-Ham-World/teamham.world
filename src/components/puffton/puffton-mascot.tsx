@@ -21,8 +21,14 @@ const PUFF_ASCII_EXCITED = `
 
 const PUFF_ASCII_ALERT = `
   /\\___/\\
- (  O_O  )  ⚡ "BANDIT ALERT!"
+ (  O_O  )  ⚡ "BANDIT PUFF SPOTTED!"
   ( - - )
+`;
+
+const PUFF_ASCII_BANDIT = `
+  /\\___/\\
+ ( [•]_[•] )  🦹 "BANDIT PUFF IN POSITION!"
+  > === <  [TONER]
 `;
 
 const PUFF_ASCII_VICTORY = `
@@ -35,7 +41,7 @@ export function PufftonMascot({ gameState }: PufftonMascotProps) {
   const [speech, setSpeech] = useState<string>(
     "Welcome to Puffton! Deploy your starting Hamlets and Wireways.",
   );
-  const [mood, setMood] = useState<"idle" | "excited" | "alert" | "victory">("idle");
+  const [mood, setMood] = useState<"idle" | "excited" | "alert" | "bandit" | "victory">("idle");
   const [pokeCount, setPokeCount] = useState(0);
 
   const { phase, lastDiceRoll, winnerId, turnNumber, players, activePlayerIndex } = gameState;
@@ -52,7 +58,11 @@ export function PufftonMascot({ gameState }: PufftonMascotProps) {
 
       if (phase === "setup_round_1" || phase === "setup_round_2") {
         if (!activePlayer?.isBot) {
-          setSpeech("Click a dashed circle to choose your Hamlet location, then a connected path for your Wireway.");
+          setSpeech(
+            phase === "setup_round_1"
+              ? "Setup Round 1: Click a dashed circle to choose your Hamlet, then a connected path for your Wireway!"
+              : "Setup Round 2: Place your 2nd Hamlet and Wireway! You'll receive starting resource cards from neighboring hexes!",
+          );
         } else {
           setSpeech(`${activePlayer?.name} is calculating prime resource coordinates...`);
         }
@@ -61,16 +71,18 @@ export function PufftonMascot({ gameState }: PufftonMascotProps) {
       }
 
       if (phase === "robber" || phase === "discard") {
-        setSpeech("⚠️ TONER BANDIT EVENT! Discard excess inventory or reposition the Bandit to intercept resources!");
-        setMood("alert");
+        setSpeech(
+          "🦹 BANDIT PUFF IS ON THE PROWL! Move Bandit Puff to block enemy resource yields and intercept transmissions!",
+        );
+        setMood("bandit");
         return;
       }
 
       if (lastDiceRoll) {
         const rollSum = lastDiceRoll[0] + lastDiceRoll[1];
         if (rollSum === 7) {
-          setSpeech("Rolled a 7! The Toner Bandit strikes! Reposition the bandit!");
-          setMood("alert");
+          setSpeech("Rolled a 7! Bandit Puff descends! Discard excess cards and reposition the Bandit!");
+          setMood("bandit");
         } else if (rollSum === 6 || rollSum === 8) {
           setSpeech(`High yield roll! A golden ${rollSum} (${lastDiceRoll[0]} + ${lastDiceRoll[1]}) delivered resources!`);
           setMood("excited");
@@ -92,6 +104,7 @@ export function PufftonMascot({ gameState }: PufftonMascotProps) {
       "Watch the longest Wireway! 5 roads minimum to claim 2 VP!",
       "Trading with ports drops bank rates from 4:1 to 3:1 or 2:1!",
       "Toner Guard cards count towards Largest Army (2 VP)!",
+      "Bandit Puff only blocks the tile he sits on — choose high-number enemy tiles!",
     ];
     setSpeech(quotes[pokeCount % quotes.length]);
   };
@@ -100,6 +113,8 @@ export function PufftonMascot({ gameState }: PufftonMascotProps) {
     switch (mood) {
       case "victory":
         return PUFF_ASCII_VICTORY;
+      case "bandit":
+        return PUFF_ASCII_BANDIT;
       case "alert":
         return PUFF_ASCII_ALERT;
       case "excited":
@@ -122,7 +137,7 @@ export function PufftonMascot({ gameState }: PufftonMascotProps) {
         <div className="flex-1">
           <div className="flex items-center justify-between">
             <span className="font-mono text-[10px] font-black uppercase tracking-wider text-neutral-500">
-              Puff Tactical Assistant &#183; (Click to poke)
+              Puff Tactical Companion &#183; (Click to poke)
             </span>
           </div>
           <p className="mt-1 font-mono text-xs font-bold leading-snug text-ink">{speech}</p>
