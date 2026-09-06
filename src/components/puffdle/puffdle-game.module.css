@@ -1024,3 +1024,34 @@
     box-shadow: 3px 3px 0 var(--color-ink);
   }
 }
+
+.countdown {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-ink);
+  font-family: var(--font-mono);
+}
+
+.countdownLabel {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.countdownReset {
+  margin-top: 0.2rem;
+  color: var(--color-muted);
+  font-size: 0.7rem;
+}
+
+.countdownTime {
+  font-size: 1.35rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
