@@ -343,6 +343,7 @@ describe("member V2 document validation", () => {
       "https://foo.0x10/",
       "https://xn--a.com/",
       "HTTPS://xn--a.com/",
+      "https://sub.xn--ba.com/",
       "https://%/",
       exactHttpsUrl(MAX_URL_CHARS + 1),
       "/relative",
@@ -380,6 +381,14 @@ describe("member V2 document validation", () => {
       const doc = canonicalMemberPageDocument() as unknown as Record<string, unknown>;
       mutate(doc);
       expectFailure(doc, path);
+    }
+  });
+
+  it("accepts internationalized hostnames in Unicode and Punycode forms", () => {
+    for (const websiteUrl of ["https://bücher.example/", "https://xn--bcher-kva.example/"]) {
+      const doc = minimalMemberPageDocument();
+      doc.frame.websiteUrl = websiteUrl;
+      expect(parseMemberPageDocumentV2(doc)).toEqual({ success: true, doc });
     }
   });
 

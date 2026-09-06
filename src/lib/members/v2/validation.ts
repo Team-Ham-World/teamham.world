@@ -1,3 +1,5 @@
+import { toUnicode } from "punycode/";
+
 import { PROJECTS } from "@/data/projects";
 import type {
   AdditionalLinksBlock,
@@ -192,6 +194,8 @@ function isHttpsUrl(value: string): boolean {
     return (
       parsed.protocol === "https:" &&
       Boolean(parsed.hostname) &&
+      // URL parsing differs across runtimes; encoded controls remain invalid.
+      !CONTROL_CHARACTERS.test(toUnicode(parsed.hostname)) &&
       parsed.username === "" &&
       parsed.password === ""
     );
