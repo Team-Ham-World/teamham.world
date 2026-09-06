@@ -14,12 +14,12 @@ import {
   type TileEvaluation,
 } from "@/lib/puffdle/game";
 import {
-  getDailyWord,
   getRandomUnlimitedWord,
   isValidGuess,
 } from "@/lib/puffdle/words";
 
-import { parseStoredStats, restoreDailyGame } from "@/lib/puffdle/storage";
+import { parseStoredStats } from "@/lib/puffdle/storage";
+import { usePuffdleDaily } from "./use-puffdle-daily";
 import { usePuffdleLeaderboard } from "./use-puffdle-leaderboard";
 
 import styles from "./puffdle-game.module.css";
@@ -32,18 +32,19 @@ const KEYBOARD_ROWS = [
 ];
 
 const LOCAL_STATS_KEY = "ham:puffdle:stats:v1";
-const DAILY_STATE_PREFIX = "ham:puffdle:daily:v1:";
 
 type ModalView = "none" | "help" | "stats" | "leaderboard" | "gameover";
 
-export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof getDailyWord> } = {}) {
+export function PuffdleGame() {
   const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<GameMode>("daily");
-  const [gameState, setGameState] = useState<PuffdleGameState>(() => {
-    const daily = initialDaily ?? getDailyWord();
-    return createInitialPuffdleState(daily.word, "daily", daily.dayNumber);
-  });
-  const [stats, setStats] = useState<PuffdleStats>(createDefaultStats);
+  const [unlimitedState, setGameState] = useState<PuffdleGameState>(() => createInitialPuffdleState("", "unlimited"));
+  const [unlimitedStats, setStats] = useState<PuffdleStats>(createDefaultStats);
+  const daily = usePuffdleDaily();
+  const { refresh: refreshDaily, submit: submitDaily, setDraft: setDailyDraft } = daily;
+  const gameState = mode === "daily" ? daily.game : unlimitedState;
+  const stats = mode === "daily" ? daily.stats : unlimitedStats;
+  const canPlay = ready && (mode === "unlimited" || daily.canPlay);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isShaking, setIsShaking] = useState(false);
   const [modal, setModal] = useState<ModalView>("none");
@@ -61,7 +62,7 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
     }, durationMs);
   }, []);
 
-  // Load saved stats and daily state on initial client mount
+  // Restore browser statistics for Unlimited.
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       try {
@@ -74,22 +75,7 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
         // LocalStorage might be restricted
       }
 
-      const daily = getDailyWord();
-      setGameState(createInitialPuffdleState(daily.word, "daily", daily.dayNumber));
-      try {
-        const savedDailyState = localStorage.getItem(`${DAILY_STATE_PREFIX}${daily.dayNumber}`);
-        if (savedDailyState) {
-          const parsed = restoreDailyGame(JSON.parse(savedDailyState), daily);
-          if (parsed) {
-            setGameState(parsed);
-            if (parsed.status !== "IN_PROGRESS") {
-              setModal("gameover");
-            }
-          }
-        }
-      } catch {
-        // Ignore storage errors
-      }
+      setGameState(createInitialPuffdleState(getRandomUnlimitedWord(), "unlimited"));
       setReady(true);
     });
 
@@ -101,50 +87,13 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
     };
   }, []);
 
-  // Sync Daily game state to local storage
-  const persistDailyState = useCallback((stateToSave: PuffdleGameState) => {
-    if (stateToSave.mode !== "daily") return;
-    try {
-      localStorage.setItem(
-        `${DAILY_STATE_PREFIX}${stateToSave.dayNumber}`,
-        JSON.stringify(stateToSave),
-      );
-    } catch {
-      // Ignore storage errors
-    }
-  }, []);
-
-  // Switch between Daily and Unlimited modes
-  const handleModeChange = useCallback(
-    (newMode: GameMode) => {
-      if (newMode === mode) return;
-      if (gameoverTimerRef.current) clearTimeout(gameoverTimerRef.current);
-      setModal("none");
-      setMode(newMode);
-      setToastMessage(null);
-
-      if (newMode === "daily") {
-        const daily = getDailyWord();
-        try {
-          const saved = localStorage.getItem(`${DAILY_STATE_PREFIX}${daily.dayNumber}`);
-          if (saved) {
-            const parsed = restoreDailyGame(JSON.parse(saved), daily);
-            if (parsed) {
-              setGameState(parsed);
-              return;
-            }
-          }
-        } catch {
-          // Ignore
-        }
-        setGameState(createInitialPuffdleState(daily.word, "daily", daily.dayNumber));
-      } else {
-        const unlimitedWord = getRandomUnlimitedWord();
-        setGameState(createInitialPuffdleState(unlimitedWord, "unlimited"));
-      }
-    },
-    [mode],
-  );
+  const handleModeChange = useCallback((newMode: GameMode) => {
+    if (newMode === mode) return;
+    if (gameoverTimerRef.current) clearTimeout(gameoverTimerRef.current);
+    setModal("none"); setMode(newMode); setToastMessage(null);
+    if (newMode === "daily") void refreshDaily();
+    else setGameState(createInitialPuffdleState(getRandomUnlimitedWord(), "unlimited"));
+  }, [mode, refreshDaily]);
 
   // Start fresh Unlimited game
   const startNewUnlimitedGame = useCallback(() => {
@@ -155,35 +104,19 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
     showToast("NEW UNLIMITED GAME STARTED");
   }, [showToast]);
 
-  const refreshDaily = useCallback(() => {
-    if (mode !== "daily") return false;
-    const daily = getDailyWord();
-    if (daily.dayNumber === gameState.dayNumber) return false;
-    if (gameoverTimerRef.current) clearTimeout(gameoverTimerRef.current);
-    let next = createInitialPuffdleState(daily.word, "daily", daily.dayNumber);
-    try {
-      const saved = localStorage.getItem(`${DAILY_STATE_PREFIX}${daily.dayNumber}`);
-      if (saved) next = restoreDailyGame(JSON.parse(saved), daily) ?? next;
-    } catch { /* Storage can be unavailable. */ }
-    setGameState(next);
-    setModal("none");
-    showToast("A NEW DAILY PUFFDLE IS READY");
-    return true;
-  }, [mode, gameState.dayNumber, showToast]);
-
   useEffect(() => {
-    const interval = setInterval(refreshDaily, 30_000);
-    document.addEventListener("visibilitychange", refreshDaily);
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener("visibilitychange", refreshDaily);
-    };
-  }, [refreshDaily]);
+    if (mode !== "daily") return;
+    const timer = setTimeout(() => {
+      if (gameState.status === "IN_PROGRESS") setModal(prev => prev === "gameover" ? "none" : prev);
+      else { setModal("gameover"); void loadLeaderboard(); }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [mode, gameState.status, gameState.dayNumber, loadLeaderboard]);
 
   // Handle letter typing
   const handleKeyInput = useCallback(
     (key: string) => {
-      if (!ready || refreshDaily()) return;
+      if (!canPlay) return;
       if (modal !== "none") return;
       if (gameState.status !== "IN_PROGRESS") return;
 
@@ -206,9 +139,10 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
           return;
         }
 
+        if (mode === "daily") { submitDaily(); return; }
+
         const { state: nextState } = submitGuess(gameState, gameState.currentGuess);
         setGameState(nextState);
-        persistDailyState(nextState);
 
         if (nextState.status !== "IN_PROGRESS") {
           const isWon = nextState.status === "WON";
@@ -237,24 +171,20 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
 
       if (upperKey === "BACKSPACE" || upperKey === "⌫") {
         if (gameState.currentGuess.length > 0) {
-          setGameState((prev) => ({
-            ...prev,
-            currentGuess: prev.currentGuess.slice(0, -1),
-          }));
+          if (mode === "daily") setDailyDraft(prev => prev.slice(0, -1));
+          else setGameState(prev => ({ ...prev, currentGuess: prev.currentGuess.slice(0, -1) }));
         }
         return;
       }
 
       if (/^[A-Z]$/.test(upperKey)) {
         if (gameState.currentGuess.length < 5) {
-          setGameState((prev) => ({
-            ...prev,
-            currentGuess: prev.currentGuess + upperKey,
-          }));
+          if (mode === "daily") setDailyDraft(prev => prev.length < 5 ? prev + upperKey : prev);
+          else setGameState(prev => ({ ...prev, currentGuess: prev.currentGuess + upperKey }));
         }
       }
     },
-    [gameState, modal, persistDailyState, showToast, stats, submitMemberScore, refreshDaily, ready],
+    [gameState, modal, showToast, stats, submitMemberScore, canPlay, mode, submitDaily, setDailyDraft],
   );
 
   // Physical keyboard event listener
@@ -320,9 +250,17 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
       <div className={styles.mainColumn}>
         <div aria-live="polite" className="text-sm text-muted">
           {!ready && <p>Loading your saved game…</p>}
-          {saveStatus === "saving" && <p>Saving your result to the member board…</p>}
-          {saveStatus === "saved" && <p>Result saved to the member board.</p>}
-          {saveStatus === "error" && (
+          {mode === "daily" && <>
+            {daily.status === "loading" && <p>Loading your account’s daily game…</p>}
+            {daily.status === "signed-out" && <p><a href="/account" className="font-bold underline">Sign in with Discord</a> to play one Daily Puffdle per UTC day. You can play Unlimited without signing in.</p>}
+            {daily.busy && daily.status !== "loading" && <p>Syncing your daily game…</p>}
+            {daily.message && <p role="status">{daily.message}</p>}
+            {daily.status === "error" && <button type="button" className="font-bold underline" disabled={daily.busy} onClick={() => void daily.refresh()}>Retry daily game</button>}
+            {gameState.status !== "IN_PROGRESS" && <p>Today’s Daily Puffdle is complete. The next puzzle opens at 00:00 UTC.</p>}
+          </>}
+          {mode === "unlimited" && saveStatus === "saving" && <p>Saving your result to the member board…</p>}
+          {mode === "unlimited" && saveStatus === "saved" && <p>Result saved to the member board.</p>}
+          {mode === "unlimited" && saveStatus === "error" && (
             <p role="alert">
               Your result could not be saved to the member board. Keep this page open to retry. {" "}
               <button type="button" className="font-bold underline" onClick={() => void retrySave()}>Retry save</button>
@@ -334,7 +272,7 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
           <div className={styles.topRow}>
             <div className={styles.titleGroup}>
               <span className={styles.eyebrow}>
-                {mode === "daily" ? `DAILY TRANSMISSION #${gameState.dayNumber}` : "UNLIMITED ARCHIVE"}
+                {mode === "daily" ? (daily.status === "ready" ? `DAILY TRANSMISSION #${gameState.dayNumber}` : "DAILY TRANSMISSION") : "UNLIMITED ARCHIVE"}
               </span>
               <h1 className={styles.gameTitle}>PUFFDLE</h1>
             </div>
@@ -464,7 +402,7 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
                   <button
                     key={key}
                     type="button"
-                    disabled={!ready}
+                    disabled={!canPlay || gameState.status !== "IN_PROGRESS"}
                     onClick={() => handleKeyInput(key)}
                     className={`${styles.key} ${isSpecial ? styles.keySpecial : ""} ${statusClass}`}
                   >
@@ -534,7 +472,7 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
 
                   <p>Scores range from 600 points for a first-guess solve to 100 for a sixth-guess solve. The member board ranks your best single game.</p>
                   <p>
-                    <strong>Daily Puffdle</strong> uses the same word for everyone each UTC day. Words repeat only after the full word list has cycled. <strong>Puffdle Unlimited</strong> gives you endless games anytime.
+                    <strong>Daily Puffdle</strong> requires sign-in and allows one game per account each UTC day. Every guess is saved across devices. It uses the same word for everyone each UTC day. Words repeat only after the full word list has cycled. <strong>Puffdle Unlimited</strong> gives you endless games anytime.
                   </p>
                 </div>
                 <div className={styles.modalActions}>
@@ -655,7 +593,7 @@ export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof
 
                 {leaderboard.status === "error" && (
                   <div className={styles.memberNotice}>
-                    The member board could not be loaded. You can keep playing locally. {" "}
+                    The member board could not be loaded. You can keep playing Unlimited locally. {" "}
                     <button type="button" className="font-bold underline" onClick={() => void loadLeaderboard()}>Retry leaderboard</button>
                   </div>
                 )}

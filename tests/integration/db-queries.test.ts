@@ -1,3 +1,5 @@
+import { getDailyGame, submitDailyGuess } from "../../src/lib/puffdle/daily";
+import { getDailyWord, PUFFDLE_TARGET_WORDS } from "../../src/lib/puffdle/words";
 /**
  * Real PostgreSQL Schema, Query, and Least-Privilege Integration Suite
  *
@@ -487,7 +489,9 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migrations 0001 through 0010
+    // 2. Clean existing tables and apply migrations 0001 through 0011
+    await ownerPool.query(`DROP TABLE IF EXISTS public.puff_puffdle_daily_games CASCADE;`);
+    await ownerPool.query(`DROP TABLE IF EXISTS public.puff_puffdle_daily_puzzles CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_mutation_rate_limits CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_assets CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_pages CASCADE;`);
@@ -1003,6 +1007,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(migration0008Sql);
     await ownerPool.query(migration0009Sql);
     await ownerPool.query(fs.readFileSync(path.resolve(__dirname, '../../migrations/0010_puff_puffdle_leaderboard.sql'), 'utf8'));
+    await ownerPool.query(fs.readFileSync(path.resolve(__dirname, '../../migrations/0011_puffdle_daily_games.sql'), 'utf8'));
 
     const memberV2BackfillRows = await ownerPool.query<MemberV2BackfillRow>(
       `SELECT
@@ -1056,6 +1061,8 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     // Clear data between tests to ensure test isolation in FK-safe order
     await ownerPool.query('DELETE FROM public.member_page_assets;');
     await ownerPool.query('DELETE FROM public.member_pages;');
+    await ownerPool.query('DELETE FROM public.puff_puffdle_daily_games;');
+    await ownerPool.query('DELETE FROM public.puff_puffdle_daily_puzzles;');
     await ownerPool.query('DELETE FROM public.puff_puffdle_scores;');
     await ownerPool.query('DELETE FROM public.puff_print_run_scores;');
     await ownerPool.query('DELETE FROM public.puff_flappy_scores;');
@@ -4301,6 +4308,50 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
       );
       return result.rows[0].id;
     }
+
+    it('persists one daily game across devices, resolves races, and scores a completion once', async () => {
+      const accountId = await member(1550);
+      const first = await getDailyGame(accountId, runtimeUrl);
+      expect(first.game.targetWord).toBe('');
+      const answer = getDailyWord(`${first.puzzleDate}T00:00:00Z`).word.toUpperCase();
+      const wrong = PUFFDLE_TARGET_WORDS.filter(w => w.toUpperCase() !== answer).slice(0, 2).map(w => w.toUpperCase());
+      const payload = { accountId, puzzleDate: first.puzzleDate, revision: 0, guess: wrong[0] };
+      const race = await Promise.all([submitDailyGuess(accountId, payload, runtimeUrl), submitDailyGuess(accountId, { ...payload, guess: wrong[1] }, runtimeUrl)]);
+      expect(race.filter(r => r.conflict)).toHaveLength(1);
+      const resumed = await getDailyGame(accountId, runtimeUrl);
+      expect(resumed.game.guesses).toHaveLength(1);
+      expect(resumed.game.targetWord).toBe('');
+      const accepted = resumed.game.guesses[0];
+      expect((await submitDailyGuess(accountId, { ...payload, guess: accepted }, runtimeUrl)).conflict).toBe(false);
+      const win = { ...payload, revision: 1, guess: answer };
+      await Promise.all([submitDailyGuess(accountId, win, runtimeUrl), submitDailyGuess(accountId, win, runtimeUrl)]);
+      const finished = await getDailyGame(accountId, runtimeUrl);
+      expect(finished.game).toMatchObject({ status: 'WON', targetWord: answer, pointsEarned: 500 });
+      expect(finished.stats).toMatchObject({ gamesPlayed: 1, gamesWon: 1 });
+      expect((await getPuffdleLeaderboard(accountId, runtimeUrl)).stats.gamesPlayed).toBe(1);
+      expect((await submitDailyGuess(accountId, { ...payload, revision: 2 }, runtimeUrl)).conflict).toBe(true);
+      await expect(runtimePool.query("UPDATE public.puff_puffdle_daily_games SET guesses = '{}' WHERE account_id = $1", [accountId])).rejects.toMatchObject({ code: '23514' });
+      await expect(runtimePool.query('DELETE FROM public.puff_puffdle_daily_games WHERE account_id = $1', [accountId])).rejects.toMatchObject({ code: '42501' });
+      await expect(runtimePool.query('UPDATE public.puff_puffdle_daily_puzzles SET target_word = $1', [wrong[0]])).rejects.toMatchObject({ code: '42501' });
+    }, 15000);
+
+    it('rejects stale days and accounts, locks losses, and isolates members', async () => {
+      const accountId = await member(1551);
+      const other = await member(1552);
+      const first = await getDailyGame(accountId, runtimeUrl);
+      const answer = getDailyWord(`${first.puzzleDate}T00:00:00Z`).word.toUpperCase();
+      const guess = PUFFDLE_TARGET_WORDS.find(w => w.toUpperCase() !== answer)!.toUpperCase();
+      const payload = { accountId, puzzleDate: first.puzzleDate, revision: 0, guess };
+      expect((await submitDailyGuess(accountId, { ...payload, puzzleDate: '2000-01-01' }, runtimeUrl)).conflict).toBe(true);
+      expect((await submitDailyGuess(other, payload, runtimeUrl)).conflict).toBe(true);
+      for (let revision = 0; revision < 6; revision++) {
+        expect((await submitDailyGuess(accountId, { ...payload, revision }, runtimeUrl)).conflict).toBe(false);
+      }
+      expect((await getDailyGame(accountId, runtimeUrl)).game.status).toBe('LOST');
+      expect((await getDailyGame(other, runtimeUrl)).game.guesses).toEqual([]);
+      expect((await submitDailyGuess(accountId, { ...payload, revision: 5, guess: answer }, runtimeUrl)).conflict).toBe(true);
+      expect((await getPuffdleLeaderboard(accountId, runtimeUrl)).stats).toMatchObject({ gamesPlayed: 1, gamesWon: 0 });
+    }, 15000);
 
     it('saves and reads through authenticated HTTP handlers using the runtime role', async () => {
       const accountId = await member(1500);
