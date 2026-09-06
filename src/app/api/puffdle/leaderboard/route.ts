@@ -1,72 +1,7 @@
-import {
-  getAuthConfig,
-  getAuthMode,
-  validateLogoutOrigin,
-  validateRequestOrigin,
-} from "@/lib/auth/config";
-import { hashSessionToken, isValidSessionToken } from "@/lib/auth/crypto";
-import { verifySession, type VerifiedAccount } from "@/lib/auth/db";
-import {
-  applyProtectedHeaders,
-  createDisabledModeNotFoundResponse,
-  getSingleCookieValue,
-  SESSION_COOKIE_NAME,
-} from "@/lib/auth/http";
-import {
-  getPuffdleLeaderboard,
-  savePuffdleScore,
-} from "@/lib/puffdle/leaderboard";
-
+import { getAuthConfig, validateLogoutOrigin } from "@/lib/auth/config";
+import { authenticatePuffdleMember as authenticate, puffdleJson as json, readPuffdleBody } from "@/lib/puffdle/http";
+import { getPuffdleLeaderboard, savePuffdleScore } from "@/lib/puffdle/leaderboard";
 import { isValidPuffdleScore, isValidPuffdleStats } from "@/lib/puffdle/contracts";
-
-function json(body: unknown, status = 200): Response {
-  const headers = new Headers();
-  applyProtectedHeaders(headers);
-  headers.set("Content-Type", "application/json; charset=utf-8");
-  return new Response(JSON.stringify(body), { status, headers });
-}
-
-type MemberResult =
-  | { kind: "member"; account: VerifiedAccount; databaseUrl: string }
-  | { kind: "signed-out" }
-  | { kind: "response"; response: Response };
-
-async function authenticate(request: Request): Promise<MemberResult> {
-  let mode;
-  try {
-    mode = getAuthMode();
-  } catch {
-    return { kind: "response", response: createDisabledModeNotFoundResponse() };
-  }
-  if (mode === "disabled") {
-    return { kind: "response", response: createDisabledModeNotFoundResponse() };
-  }
-
-  let config;
-  try {
-    config = getAuthConfig();
-  } catch {
-    return { kind: "response", response: json({ error: "server_configuration_error" }, 500) };
-  }
-
-  if (config.mode === "production" && !validateRequestOrigin(request, config)) {
-    return { kind: "response", response: json({ error: "invalid_request_host" }, 400) };
-  }
-
-  const cookie = getSingleCookieValue(request, SESSION_COOKIE_NAME);
-  if (cookie.status !== "found" || !isValidSessionToken(cookie.value)) {
-    return { kind: "signed-out" };
-  }
-
-  try {
-    const result = await verifySession(hashSessionToken(cookie.value), config.databaseUrl);
-    return result.valid
-      ? { kind: "member", account: result.account, databaseUrl: config.databaseUrl }
-      : { kind: "signed-out" };
-  } catch {
-    return { kind: "response", response: json({ error: "service_unavailable" }, 503) };
-  }
-}
 
 export async function GET(request: Request): Promise<Response> {
   const member = await authenticate(request);
@@ -93,31 +28,6 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
-const MAX_BODY_BYTES = 2_048;
-
-async function readScoreBody(request: Request): Promise<unknown> {
-  const reader = request.body?.getReader();
-  if (!reader) throw new Error("Missing body");
-  const decoder = new TextDecoder();
-  let text = "";
-  let size = 0;
-  try {
-    while (true) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      size += chunk.value.byteLength;
-      if (size > MAX_BODY_BYTES) {
-        await reader.cancel();
-        throw new RangeError("Body too large");
-      }
-      text += decoder.decode(chunk.value, { stream: true });
-    }
-    return JSON.parse(text + decoder.decode());
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 export async function POST(request: Request): Promise<Response> {
   const member = await authenticate(request);
   if (member.kind === "response") return member.response;
@@ -131,12 +41,12 @@ export async function POST(request: Request): Promise<Response> {
   if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
     return json({ error: "unsupported_media_type" }, 415);
   }
-  if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES) {
+  if (Number(request.headers.get("content-length")) > 2_048) {
     return json({ error: "request_body_too_large" }, 413);
   }
   let body: unknown;
   try {
-    body = await readScoreBody(request);
+    body = await readPuffdleBody(request);
   } catch (error) {
     return error instanceof RangeError
       ? json({ error: "request_body_too_large" }, 413)

@@ -1,57 +1,71 @@
 # Puffdle
 
 Puffdle lives at `/puffcade/puffdle`; `/puffdle` permanently redirects there.
-The daily puzzle uses a UTC day and a deterministic word-list permutation.
-The page renders at request time, and an open daily game refreshes when the UTC
-day changes. Unlimited games use the same target-word pool.
+Daily requires an active, eligible member session. Unlimited supports guests.
 
-## Member leaderboard
+## Daily game authority
 
-The leaderboard ranks the member's best **single game**, across both modes:
-600 points for a first-guess solve, then 500, 400, 300, 200, or 100. A loss is
-worth zero. Equal scores are ordered by when the high score was first achieved,
-then account ID. Only active, eligible members appear; only authenticated
-members can read the board or submit scores.
+`GET /api/puffdle/daily` resumes the authenticated account's game for the
+**database's current UTC date**. A canonical daily puzzle is stored once for
+everyone. The account/date primary key allows exactly one daily game. Clearing
+browser storage, changing devices, signing out and back in, or changing the
+client clock cannot reset its guesses or outcome.
 
-`GET` and `POST /api/puffdle/leaderboard` use the normal member session cookie.
-POST requires a same-origin JSON request and accepts at most 2 KiB. The API and
-Postgres constrain scores to multiples of 100 from 0 to 600. Statistics are
-bounded nonnegative integers with wins <= games played and current streak <=
-maximum streak <= wins.
+`POST /api/puffdle/daily` accepts a dictionary word, puzzle date, expected guess
+count (`revision`), and expected account ID. The account ID must match the
+verified session; it does not authorize access. Same-origin JSON requests are
+limited to 2 KiB. An atomic conditional update appends exactly one guess and
+calculates its outcome. Competing guesses at the same revision conflict; an
+identical retry is idempotent. Completed games cannot be updated. A database
+trigger also prevents rewriting accepted guesses or resetting progress.
 
-The game remains a casual, client-reported leaderboard. These checks reject
-impossible values; they do not prove a player solved a puzzle without looking
-up its answer. Statistics are snapshots of this browser's play history, not
-an authoritative count of games across devices. The database keeps the maximum
-reported totals and only advances the current-streak snapshot when games played
-increases. A stale retry cannot undo a later loss or move a tie timestamp.
+Completing a game and recording its leaderboard result happen in one SQL
+statement. A failure rolls back both. No daily result is accepted from browser
+score or statistics fields. In-progress responses omit the answer. Daily stats
+come from the account's completed daily games, including consecutive UTC-date
+win streaks and guess distribution.
 
-The browser queues a result while member authentication is loading, serializes
-saves, and keeps a failed result available for an explicit retry while the page
-remains open. Wins and losses both submit statistics. Navigation or closing the
-page discards an unsaved request; the error message tells the player to keep the
-page open. Guest play works without membership services. Local storage is
-best-effort, and saved daily games are rebuilt from validated guesses.
+The browser waits for server confirmation before accepting a guess. Ambiguous
+network failures retain the exact request for safe retry; reload recovers any
+committed guess. Focus, visibility changes, and a 30-second interval refresh
+progress across devices and at UTC rollover. A failed lookup never enables local
+Daily play. Once completed, members can share the result or play Unlimited.
 
-## Database setup
+## Leaderboard and Unlimited
 
-The table and runtime-role grants are in
-`migrations/0010_puff_puffdle_leaderboard.sql`. Follow `docs/NEON_MIGRATIONS.md`
-for a Neon rehearsal and production execution. Apply this migration before
-releasing Puffdle. Do not infer availability from a signed-out GET: that response
-deliberately does not query member data.
+The shared leaderboard ranks the best **single game** across both modes: 600
+points for a first-guess solve, down to 100 for a sixth-guess solve. A loss earns
+zero. Ties use the first achievement timestamp, then account ID. Only active,
+eligible members appear. Daily completion records its score automatically.
 
-The real-Postgres integration setup includes migration 0010 and exercises the
-actual Puffdle queries and HTTP handlers using the restricted runtime role.
+Unlimited is casual, client-reported play using the same target-word pool. Its
+local statistics and authenticated `POST /api/puffdle/leaderboard` submissions
+remain bounded snapshots. They are not proof of a solve. The shared board's
+legacy totals combine these snapshots with new daily completions; use the Daily
+statistics panel for authoritative daily history. The word list and deterministic
+schedule are public code; this is replay protection, not answer secrecy or proof
+that someone solved without help.
+
+## Rollout
+
+Apply `migrations/0010_puff_puffdle_leaderboard.sql` followed by
+`migrations/0011_puffdle_daily_games.sql` before releasing this code, using
+`docs/NEON_MIGRATIONS.md`. Daily fails closed if its schema is missing. Signed-out
+GET responses do not verify database readiness.
+
+Existing browser-only daily history cannot be reliably assigned to an account
+or trusted for backfill. Account enforcement begins with this rollout. Old
+browser storage is ignored for Daily; existing leaderboard records are retained.
+Already-open old clients need a reload to use the new daily endpoint.
 
 ## Verification
 
-- `npm run typecheck`, `npm run lint`, `npm test`, and `npm run build`
+- `npm run typecheck`, `npm run lint`, `npm test`, and `AUTH_MODE=disabled npm run build`
 - `npm run test:integration:vps` with exclusive use of the disposable database
-- Start the local app using `npm run dev:vps`, then run
+- Run the local app against that test database, then
   `npm run test:e2e:vps -- tests/e2e/puffdle.e2e.ts`
 
-The browser suite covers authenticated save/readback after reload, a failed
-request followed by retry, a loss, and malformed stored-game recovery. The
-Postgres suite also checks concurrent saves, stable ties, stale snapshots,
-top-ten ordering, eligibility filtering, constraints, and restricted grants.
+Real Postgres tests cover concurrent guesses, safe retries, per-account isolation,
+win/loss locking, stale days and accounts, atomic scoring, and runtime grants.
+Browser tests cover separate devices, clearing storage, lost-response recovery,
+client clock changes, and guest Unlimited play.

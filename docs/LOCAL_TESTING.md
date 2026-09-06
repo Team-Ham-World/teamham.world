@@ -131,7 +131,7 @@ be necessary; refresh the application after the update.
 ### Schema refresh
 
 Run the real-Postgres suite to drop the known application tables, apply migrations
-`0001` through `0010`, recreate the restricted runtime role, and validate the schema
+`0001` through `0011`, recreate the restricted runtime role, and validate the schema
 and privileges:
 
 ```bash

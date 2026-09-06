@@ -3,138 +3,117 @@ import { skipUnlessAppUp, skipWithoutDatabase } from "./support/skip";
 import { getDailyWord, PUFFDLE_TARGET_WORDS } from "../../src/lib/puffdle/words";
 
 const path = "/puffcade/puffdle";
+const enter = { name: "ENTER", exact: true };
 
-test.describe("Puffdle member scores", () => {
+test.describe("Puffdle account daily games", () => {
   test.beforeEach(async () => { skipWithoutDatabase(); await skipUnlessAppUp(); });
 
-  test("saves a solved game and reads the same score after reloading", async ({ browser, member }) => {
-    const context = await ownerContext(browser, member.sessionToken);
+  test("resumes every guess on another device and cannot replay a finished daily", async ({ browser, member }) => {
+    const first = await ownerContext(browser, member.sessionToken);
+    const second = await ownerContext(browser, member.sessionToken);
     try {
-      const page = await context.newPage();
-      await page.goto(path);
-      await expect(page.getByRole("button", { name: "ENTER", exact: true })).toBeEnabled();
-      await page.getByRole("button", { name: "Member leaderboard" }).click();
-      await expect(page.getByText("MEMBER: e2e.playwright", { exact: true })).toBeVisible();
-      await page.getByRole("button", { name: "CLOSE", exact: true }).click();
-      await page.locator("h1").click();
-      await page.keyboard.type(getDailyWord().word);
-      const save = page.waitForResponse(response => response.url().endsWith("/api/puffdle/leaderboard") && response.request().method() === "POST");
-      await page.keyboard.press("Enter");
-      const response = await save;
-      expect(response.status()).toBe(200);
-      expect(await response.json()).toMatchObject({ personalBest: 600, stats: { gamesPlayed: 1, gamesWon: 1, currentStreak: 1 } });
-      await expect(page.getByText("Result saved to the member board.")).toBeVisible();
-      await page.reload();
-      await expect(page.getByRole("heading", { name: "TRANSMISSION DECODED" })).toBeVisible();
-      await page.keyboard.press("Escape");
-      await page.getByRole("button", { name: "Member leaderboard" }).click();
-      await expect(page.getByText("HIGH SCORE: 600 PTS", { exact: true })).toBeVisible();
-      await expect(page.getByText("e2e.playwright", { exact: true })).toBeVisible();
-    } finally { await context.close(); }
+      const a = await first.newPage();
+      await a.goto(path);
+      await expect(a.getByRole("button", enter)).toBeEnabled();
+      const initial = await (await a.request.get("/api/puffdle/daily")).json();
+      const answer = getDailyWord(`${initial.puzzleDate}T00:00:00Z`).word.toUpperCase();
+      const wrong = PUFFDLE_TARGET_WORDS.find(w => w.toUpperCase() !== answer)!;
+      await a.keyboard.type(wrong);
+      const saved = a.waitForResponse(r => r.url().endsWith("/api/puffdle/daily") && r.request().method() === "POST");
+      await a.keyboard.press("Enter");
+      expect((await saved).status()).toBe(200);
+      const b = await second.newPage();
+      await b.goto(path);
+      await expect(b.getByRole("button", enter)).toBeEnabled();
+      const rows = b.getByRole("main", { name: "Wordle guess board" }).locator(":scope > div");
+      await expect(rows.first()).toHaveText(wrong.toUpperCase());
+      await b.keyboard.type(answer);
+      await b.keyboard.press("Enter");
+      await expect(b.getByRole("heading", { name: "TRANSMISSION DECODED" })).toBeVisible();
+      await a.reload();
+      await expect(a.getByRole("heading", { name: "TRANSMISSION DECODED" })).toBeVisible();
+      await a.keyboard.press("Escape");
+      await expect(a.getByRole("button", enter)).toBeDisabled();
+      expect(await (await a.request.get("/api/puffdle/leaderboard")).json()).toMatchObject({ personalBest: 500, stats: { gamesPlayed: 1, gamesWon: 1 } });
+      await a.evaluate(() => localStorage.clear());
+      await a.reload();
+      await expect(a.getByRole("heading", { name: "TRANSMISSION DECODED" })).toBeVisible();
+    } finally { await first.close(); await second.close(); }
   });
 
-  test("shows a failed save and retries it without duplicating statistics", async ({ browser, member }) => {
+  test("recovers a committed guess after its response is lost without adding an attempt", async ({ browser, member }) => {
     const context = await ownerContext(browser, member.sessionToken);
     try {
       const page = await context.newPage();
-      let fail = true;
-      await page.route("**/api/puffdle/leaderboard", async route => {
-        if (route.request().method() === "POST" && fail) {
-          fail = false;
-          await route.fulfill({ status: 503, contentType: "application/json", body: '{"error":"service_unavailable"}' });
+      let drop = true;
+      await page.route("**/api/puffdle/daily", async route => {
+        if (route.request().method() === "POST" && drop) {
+          drop = false;
+          await route.fetch();
+          await route.abort("failed");
         } else await route.continue();
       });
       await page.goto(path);
-      await expect(page.getByRole("button", { name: "ENTER", exact: true })).toBeEnabled();
-      await page.keyboard.type(getDailyWord().word);
+      await expect(page.getByRole("button", enter)).toBeEnabled();
+      const initial = await (await page.request.get("/api/puffdle/daily")).json();
+      await page.keyboard.type(getDailyWord(`${initial.puzzleDate}T00:00:00Z`).word);
       await page.keyboard.press("Enter");
-      await expect(page.getByRole("button", { name: "Retry save" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Retry daily game" })).toBeVisible();
+      await expect(page.getByRole("button", enter)).toBeDisabled();
+      await page.getByRole("button", { name: "Retry daily game" }).click();
       await expect(page.getByRole("heading", { name: "TRANSMISSION DECODED" })).toBeVisible();
-      await page.keyboard.press("Escape");
-      await page.getByRole("button", { name: "Retry save" }).click();
-      await expect(page.getByText("Result saved to the member board.")).toBeVisible();
-      const response = await page.request.get("/api/puffdle/leaderboard");
-      expect(await response.json()).toMatchObject({ personalBest: 600, stats: { gamesPlayed: 1, gamesWon: 1 } });
+      expect(await (await page.request.get("/api/puffdle/daily")).json()).toMatchObject({ game: { guesses: [getDailyWord(`${initial.puzzleDate}T00:00:00Z`).word.toUpperCase()] }, stats: { gamesPlayed: 1 } });
     } finally { await context.close(); }
   });
 
-  test("queues a result until the initial member lookup finishes", async ({ browser, member }) => {
-    const context = await ownerContext(browser, member.sessionToken);
-    let release = () => {};
-    const gate = new Promise<void>(resolve => { release = resolve; });
+  test("a stale device adopts accepted progress and session loss disables play", async ({ browser, member }) => {
+    const first = await ownerContext(browser, member.sessionToken);
+    const second = await ownerContext(browser, member.sessionToken);
     try {
-      const page = await context.newPage();
-      let started = () => {};
-      const lookupStarted = new Promise<void>(resolve => { started = resolve; });
-      let first = true;
-      await page.route("**/api/puffdle/leaderboard", async route => {
-        if (route.request().method() === "GET" && first) {
-          first = false;
-          const response = await route.fetch();
-          started();
-          await gate;
-          await route.fulfill({ response });
-        } else await route.continue();
-      });
-      await page.goto(path);
-      await expect(page.getByRole("button", { name: "ENTER", exact: true })).toBeEnabled();
-      await lookupStarted;
-      await page.keyboard.type(getDailyWord().word);
-      await page.keyboard.press("Enter");
-      await expect(page.getByText(/SOLVED IN 1 GUESSES!/)).toBeVisible();
-      release();
-      await expect(page.getByText("Result saved to the member board.")).toBeVisible();
-      expect(await (await page.request.get("/api/puffdle/leaderboard")).json()).toMatchObject({ personalBest: 600 });
-    } finally { release(); await context.close(); }
+      const a = await first.newPage(); const b = await second.newPage();
+      await a.goto(path); await b.goto(path);
+      await expect(a.getByRole("button", enter)).toBeEnabled();
+      await expect(b.getByRole("button", enter)).toBeEnabled();
+      const initial = await (await a.request.get("/api/puffdle/daily")).json();
+      const answer = getDailyWord(`${initial.puzzleDate}T00:00:00Z`).word.toUpperCase();
+      const wrong = PUFFDLE_TARGET_WORDS.filter(w => w.toUpperCase() !== answer).slice(0, 2);
+      await a.keyboard.type(wrong[0]);
+      const saved = a.waitForResponse(r => r.url().endsWith("/api/puffdle/daily") && r.request().method() === "POST");
+      await a.keyboard.press("Enter"); await saved;
+      await b.keyboard.type(wrong[1]);
+      await b.keyboard.press("Enter");
+      await expect(b.getByText(/Your daily game changed on another device/)).toBeVisible();
+      await expect(b.getByRole("main", { name: "Wordle guess board" }).locator(":scope > div").first()).toHaveText(wrong[0].toUpperCase());
+      expect((await (await b.request.get("/api/puffdle/daily")).json()).game.guesses).toHaveLength(1);
+      await second.clearCookies();
+      await b.evaluate(() => window.dispatchEvent(new Event("focus")));
+      await expect(b.getByText(/to play one Daily Puffdle per UTC day/)).toBeVisible();
+      await expect(b.getByRole("button", enter)).toBeDisabled();
+    } finally { await first.close(); await second.close(); }
   });
 
-  test("records a loss on the member board", async ({ browser, member }) => {
+  test("uses the server date even when the device clock changes", async ({ browser, member }) => {
     const context = await ownerContext(browser, member.sessionToken);
     try {
       const page = await context.newPage();
       await page.goto(path);
-      await expect(page.getByRole("button", { name: "ENTER", exact: true })).toBeEnabled();
-      const target = getDailyWord().word.toLowerCase();
-      const guesses = PUFFDLE_TARGET_WORDS.filter(word => word.toLowerCase() !== target).slice(0, 6);
-      for (const guess of guesses) {
-        await page.keyboard.type(guess);
-        await page.keyboard.press("Enter");
-      }
-      await expect(page.getByText("Result saved to the member board.")).toBeVisible();
-      const response = await page.request.get("/api/puffdle/leaderboard");
-      expect(await response.json()).toMatchObject({ personalBest: 0, stats: { gamesPlayed: 1, gamesWon: 0, currentStreak: 0 } });
+      await expect(page.getByRole("button", enter)).toBeEnabled();
+      const before = await (await page.request.get("/api/puffdle/daily")).json();
+      await page.clock.setFixedTime(new Date("2030-01-01T12:00:00Z"));
+      await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      await expect(page.getByText(`DAILY TRANSMISSION #${before.game.dayNumber}`, { exact: true })).toBeVisible();
     } finally { await context.close(); }
   });
 });
 
-test.describe("Puffdle browser resilience", () => {
-  test.beforeEach(async () => { await skipUnlessAppUp(); });
-
-  test("refreshes the daily puzzle when an open page crosses UTC midnight", async ({ page }) => {
-    const before = new Date("2026-09-06T23:59:59Z");
-    const after = new Date("2026-09-07T00:00:01Z");
-    await page.clock.setFixedTime(before);
-    await page.goto(path);
-    await expect(page.getByRole("button", { name: "ENTER", exact: true })).toBeEnabled();
-    await expect(page.getByText(`DAILY TRANSMISSION #${getDailyWord(before).dayNumber}`, { exact: true })).toBeVisible();
-    await page.clock.setFixedTime(after);
-    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
-    await expect(page.getByText(`DAILY TRANSMISSION #${getDailyWord(after).dayNumber}`, { exact: true })).toBeVisible();
-  });
-
-  test("recovers from malformed local data and can start Unlimited after a finished daily game", async ({ page }) => {
-    const daily = getDailyWord();
-    await page.addInitScript(({ daily }) => {
-      localStorage.setItem("ham:puffdle:stats:v1", JSON.stringify({ gamesPlayed: 1, gamesWon: 1, guessDistribution: {} }));
-      localStorage.setItem(`ham:puffdle:daily:v1:${daily.dayNumber}`, JSON.stringify({
-        mode: "daily", targetWord: daily.word, dayNumber: daily.dayNumber,
-        guesses: [daily.word], currentGuess: "", evaluations: null, keyboardStatus: null, pointsEarned: 99999,
-      }));
-    }, { daily });
-    await page.goto(path);
-    await expect(page.getByRole("heading", { name: "TRANSMISSION DECODED" })).toBeVisible();
-    await page.getByRole("button", { name: "TRY UNLIMITED" }).click();
-    await expect(page.getByRole("heading", { name: "TRANSMISSION DECODED" })).toHaveCount(0);
-    await expect(page.getByRole("tab", { name: "PUFFDLE UNLIMITED", exact: true })).toHaveAttribute("aria-selected", "true");
-  });
+test("guests must sign in for Daily and can play Unlimited", async ({ page }) => {
+  await skipUnlessAppUp();
+  await page.goto(path);
+  await expect(page.getByText(/to play one Daily Puffdle per UTC day/)).toBeVisible();
+  await expect(page.getByRole("button", enter)).toBeDisabled();
+  await page.getByRole("tab", { name: "PUFFDLE UNLIMITED", exact: true }).click();
+  await expect(page.getByRole("button", enter)).toBeEnabled();
+  await page.keyboard.type("CRANE");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("main", { name: "Wordle guess board" }).locator(":scope > div").first()).toHaveText("CRANE");
 });
