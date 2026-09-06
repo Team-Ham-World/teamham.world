@@ -1,4 +1,4 @@
-import { toUnicode } from "punycode/";
+import { toUnicode } from "punycode";
 
 import { PROJECTS } from "@/data/projects";
 import type {
