@@ -66,3 +66,7 @@ f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client
 f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:172
 f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:174
 f954b207b4ff8d0165f08e30011f7820a6e43134:.github/workflows/ci.yml:discord-client-id:175
+
+# Synthetic Discord user/role IDs in OAuth hardening regression tests.
+fdefd883b571d65d2cfa03dccb7b97971538adbd:tests/integration/oauth-flow.test.ts:discord-client-id:866
+fdefd883b571d65d2cfa03dccb7b97971538adbd:tests/integration/oauth-flow.test.ts:discord-client-id:1064

@@ -69,7 +69,7 @@ describe('Game Route Authorization Contract Integration Tests', () => {
     );
     expect(response.headers.get('pragma')).toBe('no-cache');
     expect(response.headers.get('referrer-policy')).toBe(
-      isOAuthJson ? 'no-referrer' : 'same-origin'
+      isOAuthJson || response.status === 302 ? 'no-referrer' : 'same-origin'
     );
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
 
@@ -858,6 +858,7 @@ describe('Game Route Authorization Contract Integration Tests', () => {
       expect(data.expires_in).toBeGreaterThan(0);
       expect(data.audience).toBe(TEST_CLIENT.audience);
       expect(data.sub).toBe(pairwiseSubjectId);
+      expect(data.username).toBeUndefined();
       expect(data.scope).toBe('identity');
     });
   });
@@ -991,6 +992,7 @@ describe('Game Route Authorization Contract Integration Tests', () => {
       vi.mocked(gameDbModule.introspectGameAccessToken).mockResolvedValueOnce({
         active: true,
         subject: pairwiseSubjectId,
+        username: 'hamfriend',
         clientId: TEST_CLIENT.clientId,
         audience: TEST_CLIENT.audience,
         issuedAt: iatDate.toISOString(),
@@ -1012,12 +1014,13 @@ describe('Game Route Authorization Contract Integration Tests', () => {
 
       const data = await res.json();
 
-      // Field contract verification: exactly active, sub, client_id, aud, iss, exp, scope, token_type
-      const expectedKeys = ['active', 'aud', 'client_id', 'exp', 'iss', 'scope', 'sub', 'token_type'].sort();
+      // Display username is separate from the stable, client-specific subject.
+      const expectedKeys = ['active', 'aud', 'client_id', 'exp', 'iss', 'scope', 'sub', 'token_type', 'username'].sort();
       expect(Object.keys(data).sort()).toEqual(expectedKeys);
 
       expect(data.active).toBe(true);
       expect(data.sub).toBe(pairwiseSubjectId);
+      expect(data.username).toBe('hamfriend');
       expect(data.client_id).toBe(TEST_CLIENT.clientId);
       expect(data.aud).toBe(TEST_CLIENT.audience);
       expect(data.iss).toBe('https://teamham.world');

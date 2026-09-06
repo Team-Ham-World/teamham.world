@@ -13,7 +13,7 @@ describe("legal pages", () => {
 
     expect(privacyMetadata.title).toBe("Privacy Policy — HAM");
     expect(html).toContain("Privacy Policy");
-    expect(html).toContain('dateTime="2026-08-25"');
+    expect(html).toContain('dateTime="2026-09-05"');
     expect(html).toContain("Discord user ID");
     expect(html).toContain("Puff leaderboard");
     expect(html).toContain("We do not sell personal information");

@@ -68,12 +68,15 @@ export function getCookieValue(request: Request, cookieName: string): string | n
   return res.status === 'found' ? res.value : null;
 }
 
-export function applyProtectedHeaders(headers: Headers): Headers {
+export function applyProtectedHeaders(
+  headers: Headers,
+  referrerPolicy: 'same-origin' | 'no-referrer' = 'same-origin'
+): Headers {
   headers.set('Cache-Control', 'private, no-cache, no-store, max-age=0, must-revalidate');
   headers.set('Pragma', 'no-cache');
-  // Must not be 'no-referrer': that policy makes browsers send `Origin: null` on
-  // same-origin form POSTs, which breaks the logout route's Origin check.
-  headers.set('Referrer-Policy', 'same-origin');
+  // Pages with forms retain Origin for logout. OAuth redirects suppress URLs
+  // containing authorization codes and state, including same-origin redirects.
+  headers.set('Referrer-Policy', referrerPolicy);
 
   const existingVary = headers.get('Vary');
   if (!existingVary) {

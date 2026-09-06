@@ -3,6 +3,8 @@ import { hashSessionToken, isValidSessionToken } from '@/lib/auth/crypto';
 import { deleteSessionByTokenHash } from '@/lib/auth/db';
 import {
   applyProtectedHeaders,
+  buildClearGameAuthCookie,
+  buildClearOAuthStateCookie,
   buildClearSessionCookie,
   createAuthErrorResponse,
   createDisabledModeNotFoundResponse,
@@ -46,6 +48,8 @@ export async function POST(request: Request): Promise<Response> {
     applyProtectedHeaders(headers);
     headers.set('Location', '/');
     headers.append('Set-Cookie', buildClearSessionCookie());
+    headers.append('Set-Cookie', buildClearOAuthStateCookie());
+    headers.append('Set-Cookie', buildClearGameAuthCookie());
     return new Response(null, {
       status: 303,
       headers,
@@ -70,6 +74,8 @@ export async function POST(request: Request): Promise<Response> {
   applyProtectedHeaders(headers);
   headers.set('Location', '/');
   headers.append('Set-Cookie', buildClearSessionCookie());
+  headers.append('Set-Cookie', buildClearOAuthStateCookie());
+  headers.append('Set-Cookie', buildClearGameAuthCookie());
 
   return new Response(null, {
     status: 303,

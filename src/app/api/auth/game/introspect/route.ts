@@ -142,6 +142,7 @@ export async function POST(request: Request): Promise<Response> {
     {
       active: true,
       sub: introspectResult.subject,
+      username: introspectResult.username,
       client_id: introspectResult.clientId,
       aud: introspectResult.audience,
       iss: config.canonicalOrigin,

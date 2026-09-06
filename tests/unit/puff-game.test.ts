@@ -11,6 +11,62 @@ import {
   stepPuffGame,
 } from "@/lib/puff/game";
 
+function expectedGateSpeed(score: number): number {
+  return 168 + Math.min(58, score * 2.6);
+}
+
+type GameState = ReturnType<typeof createPuffGame>;
+type Gate = GameState["gates"][number];
+
+function displacementAfterFlap(time: number): number {
+  const timeToMaxFall = (640 - -370) / 1_080;
+  const acceleratingTime = Math.min(time, timeToMaxFall);
+  return (
+    -370 * acceleratingTime +
+    (1_080 * acceleratingTime ** 2) / 2 +
+    640 * Math.max(0, time - timeToMaxFall)
+  );
+}
+
+function expectFeasibleTransition(
+  state: GameState,
+  predecessor: Gate,
+  successor: Gate,
+  forecastScore: number,
+): void {
+  const playableBottom = state.height - GROUND_HEIGHT;
+  const travelTime =
+    Math.max(
+      0,
+      successor.x - predecessor.x - GATE_WIDTH - PUFF_RADIUS * 2,
+    ) / expectedGateSpeed(forecastScore);
+  const predecessorClearance = predecessor.gapHeight / 2 - PUFF_RADIUS;
+  const successorClearance = successor.gapHeight / 2 - PUFF_RADIUS;
+  const reachableTop = Math.max(
+    PUFF_RADIUS,
+    Math.min(
+      playableBottom - PUFF_RADIUS,
+      predecessor.gapY - predecessorClearance - 370 * travelTime,
+    ),
+  );
+  const reachableBottom = Math.max(
+    PUFF_RADIUS,
+    Math.min(
+      playableBottom - PUFF_RADIUS,
+      predecessor.gapY +
+        predecessorClearance +
+        displacementAfterFlap(travelTime),
+    ),
+  );
+
+  expect(successor.gapY + successorClearance).toBeGreaterThanOrEqual(
+    reachableTop,
+  );
+  expect(successor.gapY - successorClearance).toBeLessThanOrEqual(
+    reachableBottom,
+  );
+}
+
 describe("Flappy Puff game model", () => {
   it("creates a deterministic ready run with generous toner-gate spacing", () => {
     const first = createPuffGame(1280, 600, 1234);
@@ -23,6 +79,66 @@ describe("Flappy Puff game model", () => {
     expect(first.gates[1].x - first.gates[0].x).toBeGreaterThanOrEqual(320);
     expect(first.gates[1].x - first.gates[0].x).toBeLessThanOrEqual(400);
     expect(first.gates[0].gapHeight).toBeGreaterThanOrEqual(170);
+  });
+
+  it("keeps initial gate centers legal and passable intervals feasible", () => {
+    const state = createPuffGame(320, 600, 1);
+
+    for (const gate of state.gates) {
+      const halfGap = gate.gapHeight / 2;
+      expect(gate.gapY).toBeGreaterThanOrEqual(23 + halfGap);
+      expect(gate.gapY).toBeLessThanOrEqual(
+        state.height - GROUND_HEIGHT - 23 - halfGap,
+      );
+    }
+
+    for (let index = 1; index < state.gates.length; index++) {
+      expectFeasibleTransition(
+        state,
+        state.gates[index - 1],
+        state.gates[index],
+        index,
+      );
+    }
+  });
+
+  it("keeps a recycled gate legal and physically feasible at high speed", () => {
+    const state = createPuffGame(320, 600, 1234);
+    flapPuff(state);
+    state.score = 100;
+    state.bird.y = 279;
+    state.bird.velocityY = 0;
+
+    const [recycled, ...remaining] = state.gates;
+    recycled.x = -GATE_WIDTH - 20;
+    recycled.scored = true;
+    remaining.forEach((gate, index) => {
+      gate.x = 400 + index * 320;
+      gate.scored = false;
+    });
+    const predecessor = remaining.at(-1)!;
+
+    stepPuffGame(state, 1 / 60);
+
+    const halfGap = recycled.gapHeight / 2;
+    expect(recycled.gapY).toBeGreaterThanOrEqual(23 + halfGap);
+    expect(recycled.gapY).toBeLessThanOrEqual(
+      state.height - GROUND_HEIGHT - 23 - halfGap,
+    );
+    expectFeasibleTransition(
+      state,
+      predecessor,
+      recycled,
+      state.score + remaining.length,
+    );
+  });
+
+  it("allows a fixed-seed transition beyond the old conservative limit", () => {
+    const state = createPuffGame(320, 600, 1);
+    const [first, second] = state.gates;
+
+    expect(Math.abs(second.gapY - first.gapY)).toBeGreaterThan(189);
+    expectFeasibleTransition(state, first, second, 1);
   });
 
   it("starts on the first flap and applies upward velocity", () => {

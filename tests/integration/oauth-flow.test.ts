@@ -18,7 +18,7 @@ import {
   OAUTH_STATE_COOKIE_NAME,
   SESSION_COOKIE_NAME,
 } from '@/lib/auth/http';
-import { signGameAuthCookie, GameAuthRequestPayload } from '@/lib/auth/game-oauth';
+import { hashGameToken, signGameAuthCookie, GameAuthRequestPayload } from '@/lib/auth/game-oauth';
 import * as dbModule from '@/lib/auth/db';
 import * as discordModule from '@/lib/auth/discord';
 import {
@@ -71,7 +71,7 @@ describe('OAuth Flow Integration', () => {
     expect(response.headers.get('cache-control')).toBe(
       'private, no-cache, no-store, max-age=0, must-revalidate'
     );
-    expect(response.headers.get('referrer-policy')).toBe('same-origin');
+    expect(response.headers.get('referrer-policy')).toBe(response.status === 302 ? 'no-referrer' : 'same-origin');
     const vary = response.headers.get('vary') || '';
     expect(vary.toLowerCase()).toContain('cookie');
   }
@@ -337,6 +337,7 @@ describe('OAuth Flow Integration', () => {
         const verifiedPayload = verifyOAuthStateCookie(cookieVal, VALID_PROD_ENV.OAUTH_STATE_HMAC_SECRET);
         expect(verifiedPayload).not.toBeNull();
         expect(verifiedPayload!.returnTo).toBe(ALLOWED_OAUTH_RETURN_TO);
+        expect(verifiedPayload!.gameAuthRequestHash).toBe(hashGameToken(gameCookie));
       });
     });
   });
@@ -349,10 +350,11 @@ describe('OAuth Flow Integration', () => {
     function createValidSignedCookie(
       state = validState,
       verifier = validVerifier,
-      returnTo: AllowedOAuthReturnTo | null = null
+      returnTo: AllowedOAuthReturnTo | null = null,
+      pendingGameCookie = createValidGameAuthCookie(nowSec)
     ): string {
       return signOAuthState(
-        { state, verifier, issuedAt: nowSec, returnTo },
+        { state, verifier, issuedAt: nowSec, returnTo, gameAuthRequestHash: returnTo ? hashGameToken(pendingGameCookie) : null },
         VALID_PROD_ENV.OAUTH_STATE_HMAC_SECRET
       );
     }
@@ -386,7 +388,7 @@ describe('OAuth Flow Integration', () => {
       expect(await response.text()).toContain('Query string exceeds maximum allowed size');
     });
 
-    it('rejects duplicate query parameters and clears both OAuth and pending game cookies', async () => {
+    it('rejects duplicate query parameters without clearing an unverified login', async () => {
       setTestEnv(VALID_PROD_ENV);
       const signedCookie = createValidSignedCookie();
 
@@ -408,14 +410,7 @@ describe('OAuth Flow Integration', () => {
       expect(discordModule.exchangeCodeAndCheckGuildRole).not.toHaveBeenCalled();
       expect(dbModule.issueLoginSession).not.toHaveBeenCalled();
 
-      // Terminal error clears both OAuth state and pending game cookie
-      const cookies = getSetCookieHeaders(response);
-      expect(
-        cookies.some((c) => c.includes(`${OAUTH_STATE_COOKIE_NAME}=;`) && c.includes('Max-Age=0'))
-      ).toBe(true);
-      expect(
-        cookies.some((c) => c.includes(`${GAME_AUTHORIZATION_COOKIE_NAME}=;`) && c.includes('Max-Age=0'))
-      ).toBe(true);
+      expect(getSetCookieHeaders(response)).toEqual([]);
     });
 
     it('rejects unsolicited errors or invalid state without clearing cookies', async () => {
@@ -862,10 +857,32 @@ describe('OAuth Flow Integration', () => {
     });
 
     describe('Continuation / Game Resume callback handling', () => {
+      it('does not resume a different signed game request substituted during Discord login', async () => {
+        setTestEnv(VALID_PROD_ENV);
+        const original = createValidGameAuthCookie(nowSec);
+        const replacement = createValidGameAuthCookie(nowSec + 1);
+        const signedCookie = createValidSignedCookie(validState, validVerifier, ALLOWED_OAUTH_RETURN_TO, original);
+        vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
+          status: 'eligible', discordUserId: '123456789012345678', discordUsername: 'hamfriend',
+        });
+        vi.mocked(dbModule.issueLoginSession).mockResolvedValueOnce({
+          success: true, accountId: '550e8400-e29b-41d4-a716-446655440000', accessStatus: 'active',
+        });
+
+        const response = await callbackHandler(new Request(
+          `https://teamham.world/api/auth/discord/callback?code=valid_auth_code&state=${validState}`,
+          { headers: { cookie: `${OAUTH_STATE_COOKIE_NAME}=${signedCookie}; ${GAME_AUTHORIZATION_COOKIE_NAME}=${replacement}` } }
+        ));
+
+        expect(response.status).toBe(302);
+        expect(response.headers.get('location')).toBe('/account');
+        expect(getSetCookieHeaders(response)).toContainEqual(expect.stringContaining(`${GAME_AUTHORIZATION_COOKIE_NAME}=;`));
+      });
+
       it('redirects 302 to /api/auth/game/authorize/resume and RETAINS __Host-game_authz when valid', async () => {
         setTestEnv(VALID_PROD_ENV);
-        const signedCookie = createValidSignedCookie(validState, validVerifier, ALLOWED_OAUTH_RETURN_TO);
         const gameCookie = createValidGameAuthCookie();
+        const signedCookie = createValidSignedCookie(validState, validVerifier, ALLOWED_OAUTH_RETURN_TO, gameCookie);
         const discordUserId = '123456789012345678';
 
         vi.mocked(discordModule.exchangeCodeAndCheckGuildRole).mockResolvedValueOnce({
@@ -1044,7 +1061,7 @@ describe('OAuth Flow Integration', () => {
       };
 
       global.fetch = vi.fn().mockResolvedValueOnce(
-        new Response(JSON.stringify({ roles: [config.discordRequiredRoleId, 'other_role'] }), {
+        new Response(JSON.stringify({ roles: [config.discordRequiredRoleId, '123456789012345679'] }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         })
@@ -1071,7 +1088,7 @@ describe('OAuth Flow Integration', () => {
       };
 
       global.fetch = vi.fn().mockResolvedValueOnce(
-        new Response(JSON.stringify({ roles: ['other_role_only'] }), {
+        new Response(JSON.stringify({ roles: ['123456789012345679'] }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         })
@@ -1243,6 +1260,8 @@ describe('OAuth Flow Integration', () => {
       expect(dbModule.deleteSessionByTokenHash).not.toHaveBeenCalled();
       const cookies = getSetCookieHeaders(noCookieRes);
       expect(cookies.some((c) => c.includes(`${SESSION_COOKIE_NAME}=;`) && c.includes('Max-Age=0'))).toBe(true);
+      expect(cookies).toContainEqual(expect.stringContaining(`${OAUTH_STATE_COOKIE_NAME}=;`));
+      expect(cookies).toContainEqual(expect.stringContaining(`${GAME_AUTHORIZATION_COOKIE_NAME}=;`));
 
       // Invalid format cookie
       const invalidCookieReq = new Request('https://teamham.world/api/auth/logout', {
@@ -1285,6 +1304,8 @@ describe('OAuth Flow Integration', () => {
 
       const cookies = getSetCookieHeaders(res);
       expect(cookies.some((c) => c.includes(`${SESSION_COOKIE_NAME}=;`) && c.includes('Max-Age=0'))).toBe(true);
+      expect(cookies).toContainEqual(expect.stringContaining(`${OAUTH_STATE_COOKIE_NAME}=;`));
+      expect(cookies).toContainEqual(expect.stringContaining(`${GAME_AUTHORIZATION_COOKIE_NAME}=;`));
     });
 
     it('returns 503 and RETAINS cookie when database deletion fails', async () => {

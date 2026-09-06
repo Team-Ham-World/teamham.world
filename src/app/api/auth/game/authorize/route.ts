@@ -144,6 +144,7 @@ export async function GET(request: Request): Promise<Response> {
         codeHash,
         codeChallenge,
         sourceSessionHash: activeSessionTokenHash,
+        redirectUri,
         databaseUrl: config.databaseUrl,
       });
 
@@ -154,7 +155,7 @@ export async function GET(request: Request): Promise<Response> {
         redirectTarget.searchParams.set('iss', config.canonicalOrigin);
 
         const headers = new Headers();
-        applyProtectedHeaders(headers);
+        applyProtectedHeaders(headers, 'no-referrer');
         headers.set('Location', redirectTarget.toString());
 
         return new Response(null, {
@@ -192,7 +193,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const headers = new Headers();
-  applyProtectedHeaders(headers);
+  applyProtectedHeaders(headers, 'no-referrer');
   headers.set(
     'Location',
     `${config.canonicalOrigin}/api/auth/discord/login?return_to=%2Fapi%2Fauth%2Fgame%2Fauthorize%2Fresume`

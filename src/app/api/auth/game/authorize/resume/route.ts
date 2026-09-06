@@ -170,6 +170,7 @@ export async function GET(request: Request): Promise<Response> {
       codeHash,
       codeChallenge: payload.codeChallenge,
       sourceSessionHash: tokenHash,
+      redirectUri: payload.redirectUri,
       databaseUrl: config.databaseUrl,
     });
   } catch {
@@ -205,7 +206,7 @@ export async function GET(request: Request): Promise<Response> {
   redirectTarget.searchParams.set('iss', config.canonicalOrigin);
 
   const headers = new Headers();
-  applyProtectedHeaders(headers);
+  applyProtectedHeaders(headers, 'no-referrer');
   headers.set('Location', redirectTarget.toString());
   headers.append('Set-Cookie', buildClearGameAuthCookie());
 

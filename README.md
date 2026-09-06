@@ -132,6 +132,9 @@ rejects any host other than `teamham.world`.
 
 ### Game OAuth clients and delegated subdomains
 
+See [Game OAuth integration](docs/GAME_OAUTH.md) for the authorization flow,
+username response contract, and backend security requirements.
+
 The `redirect_uri` CHECK in `migrations/0002_game_backend_authorization.sql`
 accepts any `*.teamham.world` host. That was written when every subdomain was
 HAM-controlled, and delegation makes it broader than the trust model behind it.

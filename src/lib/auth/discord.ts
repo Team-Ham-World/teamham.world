@@ -24,15 +24,19 @@ export type DiscordGateResult =
 const DISCORD_API_BASE = 'https://discord.com/api/v10';
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_RESPONSE_BYTES = 65536; // 64 KB cap
+export const DISCORD_OAUTH_SCOPES = 'identify guilds.members.read';
 
-async function readBoundedJson(response: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<unknown> {
+async function readBoundedJson(response: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<Record<string, unknown>> {
+  if (response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'application/json') {
+    throw new Error('Invalid Discord response content type');
+  }
   const contentLength = response.headers.get('content-length');
   if (contentLength && parseInt(contentLength, 10) > maxBytes) {
     throw new Error('Discord response body exceeds maximum allowed size');
   }
 
   if (!response.body) {
-    return null;
+    throw new Error('Missing Discord response body');
   }
 
   const reader = response.body.getReader();
@@ -63,12 +67,11 @@ async function readBoundedJson(response: Response, maxBytes = MAX_RESPONSE_BYTES
     offset += chunk.length;
   }
 
-  const text = new TextDecoder('utf-8').decode(total);
-  if (!text || text.trim() === '') {
-    return null;
+  const data: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(total));
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new Error('Invalid Discord response shape');
   }
-
-  return JSON.parse(text);
+  return data as Record<string, unknown>;
 }
 
 export async function exchangeCodeForToken(
@@ -87,6 +90,8 @@ export async function exchangeCodeForToken(
 
   const response = await fetch(`${DISCORD_API_BASE}/oauth2/token`, {
     method: 'POST',
+    redirect: 'error',
+    cache: 'no-store',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       Accept: 'application/json',
@@ -99,8 +104,16 @@ export async function exchangeCodeForToken(
     throw new Error(`Discord token exchange failed with status ${response.status}`);
   }
 
-  const data = (await readBoundedJson(response)) as Record<string, unknown> | null;
-  if (!data || typeof data.access_token !== 'string' || !data.access_token) {
+  const data = await readBoundedJson(response);
+  const grantedScopes = typeof data.scope === 'string' ? data.scope.split(' ') : [];
+  if (
+    typeof data.access_token !== 'string' ||
+    data.access_token.length > 4096 ||
+    !/^[A-Za-z0-9\-._~+/]+=*$/.test(data.access_token) ||
+    typeof data.token_type !== 'string' || data.token_type.toLowerCase() !== 'bearer' ||
+    typeof data.expires_in !== 'number' || !Number.isSafeInteger(data.expires_in) || data.expires_in <= 0 ||
+    !DISCORD_OAUTH_SCOPES.split(' ').every((scope) => grantedScopes.includes(scope))
+  ) {
     throw new Error('Invalid token exchange response from Discord');
   }
 
@@ -110,6 +123,8 @@ export async function exchangeCodeForToken(
 export async function fetchDiscordUserIdentity(accessToken: string): Promise<DiscordIdentity> {
   const response = await fetch(`${DISCORD_API_BASE}/users/@me`, {
     method: 'GET',
+    redirect: 'error',
+    cache: 'no-store',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
@@ -121,8 +136,8 @@ export async function fetchDiscordUserIdentity(accessToken: string): Promise<Dis
     throw new Error(`Discord @me fetch failed with status ${response.status}`);
   }
 
-  const data = (await readBoundedJson(response)) as Record<string, unknown> | null;
-  if (!data || !isValidDiscordId(data.id)) {
+  const data = await readBoundedJson(response);
+  if (!isValidDiscordId(data.id)) {
     throw new Error('Invalid user identity payload from Discord');
   }
 
@@ -144,6 +159,8 @@ export async function checkGuildMembership(
   const url = `${DISCORD_API_BASE}/users/@me/guilds/${config.discordGuildId}/member`;
   const response = await fetch(url, {
     method: 'GET',
+    redirect: 'error',
+    cache: 'no-store',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
@@ -152,8 +169,8 @@ export async function checkGuildMembership(
   });
 
   if (response.status === 200) {
-    const data = (await readBoundedJson(response)) as Record<string, unknown> | null;
-    if (data && Array.isArray(data.roles)) {
+    const data = await readBoundedJson(response);
+    if (Array.isArray(data.roles) && data.roles.every(isValidDiscordId)) {
       if (data.roles.includes(config.discordRequiredRoleId)) {
         return { status: 'eligible' };
       }
@@ -163,8 +180,8 @@ export async function checkGuildMembership(
   }
 
   if (response.status === 404) {
-    const data = (await readBoundedJson(response)) as Record<string, unknown> | null;
-    const discordCode = data && typeof data === 'object' ? data.code : undefined;
+    const data = await readBoundedJson(response);
+    const discordCode = data.code;
 
     if (discordCode === 10007) {
       // 10007: Unknown Member -> confirmed ineligible
