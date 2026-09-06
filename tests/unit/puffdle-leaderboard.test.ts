@@ -5,7 +5,7 @@ import {
   MAX_PUFFDLE_STAT,
   isValidPuffdleScore,
   isValidPuffdleStat,
-} from "@/lib/puffdle/leaderboard";
+} from "@/lib/puffdle/contracts";
 
 describe("Puffdle leaderboard score and stat validation", () => {
   it("accepts valid bounded whole-number scores", () => {

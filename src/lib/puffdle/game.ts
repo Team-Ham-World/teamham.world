@@ -67,7 +67,7 @@ export function evaluateGuess(targetWord: string, guessWord: string): TileEvalua
  * 1st guess: 600, 2nd: 500, 3rd: 400, 4th: 300, 5th: 200, 6th: 100.
  */
 export function calculatePuffdlePoints(attempts: number): number {
-  if (attempts >= 1 && attempts <= MAX_ATTEMPTS) {
+  if (Number.isInteger(attempts) && attempts >= 1 && attempts <= MAX_ATTEMPTS) {
     return (7 - attempts) * 100;
   }
   return 0;
@@ -134,7 +134,7 @@ export function submitGuess(
   if (state.status !== "IN_PROGRESS") {
     return { state, error: "Game is already finished." };
   }
-  if (upperGuess.length !== WORD_LENGTH) {
+  if (!/^[A-Z]{5}$/.test(upperGuess)) {
     return { state, error: "Guess must be 5 letters." };
   }
   if (state.guesses.length >= MAX_ATTEMPTS) {
@@ -188,7 +188,7 @@ export function generateShareGrid(state: PuffdleGameState): string {
       .join(""),
   );
 
-  return `${header}\n\n${rows.join("\n")}\n\nhttps://teamham.world/puffdle`;
+  return `${header}\n\n${rows.join("\n")}\n\nhttps://teamham.world/puffcade/puffdle`;
 }
 
 /**

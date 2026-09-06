@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
+
+import { getDailyWord } from "@/lib/puffdle/words";
 
 import { PuffdleGame } from "@/components/puffdle/puffdle-game";
 import { SiteFooter } from "@/components/site-footer";
@@ -19,7 +22,8 @@ export const metadata: Metadata = {
   },
 };
 
-export default function PuffdlePage() {
+export default async function PuffdlePage() {
+  await connection();
   return (
     <div className="flex min-h-screen flex-col">
       <main className="mx-auto w-full max-w-7xl flex-1 px-3 py-4 sm:px-6 sm:py-8 lg:px-8">
@@ -29,7 +33,7 @@ export default function PuffdlePage() {
         >
           ← Back to Puffcade
         </Link>
-        <PuffdleGame />
+        <PuffdleGame initialDaily={getDailyWord()} />
       </main>
       <SiteFooter />
     </div>

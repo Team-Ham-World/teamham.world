@@ -1,55 +1,15 @@
 import { isValidDiscordUsername, isValidUuid } from "@/lib/auth/crypto";
 import { getDbClient } from "@/lib/auth/db";
 
-export const MAX_PUFFDLE_SCORE = 1_000_000;
-export const MAX_PUFFDLE_STAT = 1_000_000;
-export const PUFFDLE_LEADERBOARD_SIZE = 10;
-
-export interface PuffdleLeaderboardEntry {
-  rank: number;
-  username: string;
-  score: number;
-  mine: boolean;
-}
-
-export interface PuffdleStatsSnapshot {
-  gamesPlayed: number;
-  gamesWon: number;
-  currentStreak: number;
-  maxStreak: number;
-}
-
-export interface PuffdleLeaderboardSnapshot {
-  personalBest: number;
-  stats: PuffdleStatsSnapshot;
-  scores: PuffdleLeaderboardEntry[];
-}
-
-export interface SavePuffdleScoreInput {
-  score: number;
-  gamesPlayed?: number;
-  gamesWon?: number;
-  currentStreak?: number;
-  maxStreak?: number;
-}
-
-export function isValidPuffdleScore(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0 &&
-    value <= MAX_PUFFDLE_SCORE
-  );
-}
-
-export function isValidPuffdleStat(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0 &&
-    value <= MAX_PUFFDLE_STAT
-  );
-}
+import {
+  isValidPuffdleScore,
+  isValidPuffdleStat,
+  isValidPuffdleStats,
+  PUFFDLE_LEADERBOARD_SIZE,
+  type SavePuffdleScoreInput,
+  type PuffdleStatsSnapshot,
+  type PuffdleLeaderboardSnapshot,
+} from "./contracts";
 
 function requireAccountId(accountId: string): void {
   if (!isValidUuid(accountId)) {
@@ -73,10 +33,7 @@ export async function savePuffdleScore(
   const maxStreak = input.maxStreak ?? 0;
 
   if (
-    !isValidPuffdleStat(gamesPlayed) ||
-    !isValidPuffdleStat(gamesWon) ||
-    !isValidPuffdleStat(currentStreak) ||
-    !isValidPuffdleStat(maxStreak)
+    !isValidPuffdleStats({ gamesPlayed, gamesWon, currentStreak, maxStreak })
   ) {
     throw new Error("Invalid Puffdle stats");
   }
@@ -108,7 +65,11 @@ export async function savePuffdleScore(
       high_score = GREATEST(puff_puffdle_scores.high_score, EXCLUDED.high_score),
       games_played = GREATEST(puff_puffdle_scores.games_played, EXCLUDED.games_played),
       games_won = GREATEST(puff_puffdle_scores.games_won, EXCLUDED.games_won),
-      current_streak = EXCLUDED.current_streak,
+      current_streak = CASE
+        WHEN EXCLUDED.games_played > puff_puffdle_scores.games_played
+          THEN EXCLUDED.current_streak
+        ELSE puff_puffdle_scores.current_streak
+      END,
       max_streak = GREATEST(puff_puffdle_scores.max_streak, EXCLUDED.max_streak),
       achieved_at = CASE
         WHEN EXCLUDED.high_score > puff_puffdle_scores.high_score THEN NOW()
@@ -241,24 +202,14 @@ export async function getPuffdleLeaderboard(
   const currentStreak = personalRow ? personalRow.current_streak : 0;
   const maxStreak = personalRow ? personalRow.max_streak : 0;
 
-  if (
-    !isValidPuffdleScore(personalBest) ||
-    !isValidPuffdleStat(gamesPlayed) ||
-    !isValidPuffdleStat(gamesWon) ||
-    !isValidPuffdleStat(currentStreak) ||
-    !isValidPuffdleStat(maxStreak)
-  ) {
+  const stats = { gamesPlayed, gamesWon, currentStreak, maxStreak };
+  if (!isValidPuffdleScore(personalBest) || !isValidPuffdleStats(stats)) {
     throw new Error("Malformed Puffdle personal-best query result");
   }
 
   return {
     personalBest,
-    stats: {
-      gamesPlayed,
-      gamesWon,
-      currentStreak,
-      maxStreak,
-    },
+    stats,
     scores,
   };
 }

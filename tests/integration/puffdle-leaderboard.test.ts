@@ -166,6 +166,50 @@ describe("Puffdle leaderboard API endpoint", () => {
     expect(leaderboardModule.savePuffdleScore).not.toHaveBeenCalled();
   });
 
+  it.each([1, 599, 601, 1000000, 500.5])("rejects impossible game score %s", async (score) => {
+    setTestEnv(VALID_PROD_ENV);
+    const token = generateSessionToken();
+    mockMember(token);
+    const response = await POST(request("POST", { token, origin: "https://teamham.world", body: { score } }));
+    expect(response.status).toBe(400);
+    expect(leaderboardModule.savePuffdleScore).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { gamesPlayed: 0, gamesWon: 1, currentStreak: 0, maxStreak: 1 },
+    { gamesPlayed: 2, gamesWon: 1, currentStreak: 2, maxStreak: 1 },
+    { gamesPlayed: 2, gamesWon: 1, currentStreak: 0, maxStreak: 2 },
+    { gamesPlayed: null },
+    { gamesPlayed: 1000001 },
+  ])("rejects inconsistent statistics %j", async (stats) => {
+    setTestEnv(VALID_PROD_ENV);
+    const token = generateSessionToken();
+    mockMember(token);
+    const response = await POST(request("POST", { token, origin: "https://teamham.world", body: { score: 500, ...stats } }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: "invalid_stats" });
+  });
+
+  it("rejects oversized streamed bodies even without Content-Length", async () => {
+    setTestEnv(VALID_PROD_ENV);
+    const token = generateSessionToken();
+    mockMember(token);
+    const response = await POST(request("POST", { token, origin: "https://teamham.world", body: { score: 500, padding: "x".repeat(3000) } }));
+    expect(response.status).toBe(413);
+    expect(leaderboardModule.savePuffdleScore).not.toHaveBeenCalled();
+  });
+
+  it("reports database failures without claiming the score was saved", async () => {
+    setTestEnv(VALID_PROD_ENV);
+    const token = generateSessionToken();
+    mockMember(token);
+    vi.mocked(leaderboardModule.savePuffdleScore).mockRejectedValueOnce(new Error("database unavailable"));
+    const response = await POST(request("POST", { token, origin: "https://teamham.world", body: { score: 500 } }));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ error: "service_unavailable" });
+    expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
   it("upserts the score and returns refreshed member board", async () => {
     setTestEnv(VALID_PROD_ENV);
     const token = generateSessionToken();

@@ -1,6 +1,6 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import PuffdlePage from "@/app/puffcade/puffdle/page";
 import { PuffdleGame } from "@/components/puffdle/puffdle-game";
@@ -16,6 +16,8 @@ import {
   submitGuess,
   updateKeyboardStatus,
 } from "@/lib/puffdle/game";
+
+vi.mock("next/server", () => ({ connection: vi.fn(async () => {}) }));
 
 describe("Puffdle game evaluation and mechanics", () => {
   it("evaluates exact matching words", () => {
@@ -146,7 +148,7 @@ describe("Puffdle game evaluation and mechanics", () => {
     expect(shareText).toContain("🟩");
     expect(shareText).not.toContain("SPEED");
     expect(shareText).not.toContain("CRANE");
-    expect(shareText).toContain("https://teamham.world/puffdle");
+    expect(shareText).toContain("https://teamham.world/puffcade/puffdle");
   });
 
   it("renders mascot ASCII frames correctly", () => {
@@ -162,8 +164,8 @@ describe("Puffdle game evaluation and mechanics", () => {
     expect(frame.ink.length).toBeGreaterThan(500);
   });
 
-  it("renders PuffdlePage without duplicate SiteNav header", () => {
-    const html = renderToStaticMarkup(React.createElement(PuffdlePage));
+  it("renders PuffdlePage without duplicate SiteNav header", async () => {
+    const html = renderToStaticMarkup(await PuffdlePage());
     // PuffdlePage should not render its own SiteNav because RootLayout renders it globally
     expect(html).not.toContain('data-puff-launcher="true"');
     expect(html).toContain("PUFFDLE");

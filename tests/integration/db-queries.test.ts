@@ -57,6 +57,9 @@ import {
   generateGameAuthorizationCode,
   generateGameAccessToken,
 } from '@/lib/auth/game-oauth';
+import { getPuffdleLeaderboard, savePuffdleScore } from '@/lib/puffdle/leaderboard';
+import { GET as getPuffdleBoard, POST as postPuffdleScore } from '@/app/api/puffdle/leaderboard/route';
+import { generateSessionToken, hashSessionToken } from '@/lib/auth/crypto';
 import { getPuffLeaderboard, savePuffHighScore } from '@/lib/puff/leaderboard';
 import {
   getPrintRunLeaderboard,
@@ -484,10 +487,11 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(`REVOKE ALL ON ALL TABLES IN SCHEMA public FROM ${TEST_RUNTIME_ROLE};`);
     await ownerPool.query(`REVOKE CREATE ON SCHEMA public FROM PUBLIC;`);
 
-    // 2. Clean existing tables and apply migrations 0001 through 0009
+    // 2. Clean existing tables and apply migrations 0001 through 0010
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_mutation_rate_limits CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_page_assets CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.member_pages CASCADE;`);
+    await ownerPool.query(`DROP TABLE IF EXISTS public.puff_puffdle_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.puff_print_run_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.puff_flappy_scores CASCADE;`);
     await ownerPool.query(`DROP TABLE IF EXISTS public.game_access_tokens CASCADE;`);
@@ -998,6 +1002,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     await ownerPool.query(migration0007Sql);
     await ownerPool.query(migration0008Sql);
     await ownerPool.query(migration0009Sql);
+    await ownerPool.query(fs.readFileSync(path.resolve(__dirname, '../../migrations/0010_puff_puffdle_leaderboard.sql'), 'utf8'));
 
     const memberV2BackfillRows = await ownerPool.query<MemberV2BackfillRow>(
       `SELECT
@@ -1051,6 +1056,7 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
     // Clear data between tests to ensure test isolation in FK-safe order
     await ownerPool.query('DELETE FROM public.member_page_assets;');
     await ownerPool.query('DELETE FROM public.member_pages;');
+    await ownerPool.query('DELETE FROM public.puff_puffdle_scores;');
     await ownerPool.query('DELETE FROM public.puff_print_run_scores;');
     await ownerPool.query('DELETE FROM public.puff_flappy_scores;');
     await ownerPool.query('DELETE FROM public.game_access_tokens;');
@@ -4276,6 +4282,105 @@ describe.skipIf(!hasTestDb)('PostgreSQL Member System Integration Suite (Real DB
         200, 195, 190, 185, 180, 175, 170, 165, 160, 155,
       ]);
       expect(snapshot?.scores.some((entry) => entry.mine)).toBe(false);
+    });
+  });
+
+  describe('13b. Puffdle Member Leaderboard', () => {
+    let savedEnv: NodeJS.ProcessEnv;
+    beforeEach(() => {
+      savedEnv = { ...process.env };
+      Object.assign(process.env, VALID_DEV_ENV, { DATABASE_URL: runtimeUrl });
+    });
+    afterEach(() => { process.env = savedEnv; });
+
+    async function member(suffix: number, username = `puffdler${suffix}`) {
+      const result = await ownerPool.query<{ id: string }>(
+        `INSERT INTO public.accounts (discord_user_id, discord_username, membership_status, access_status, membership_checked_at)
+         VALUES ($1, $2, 'eligible', 'active', NOW()) RETURNING id`,
+        [makeDiscordId(suffix), username],
+      );
+      return result.rows[0].id;
+    }
+
+    it('saves and reads through authenticated HTTP handlers using the runtime role', async () => {
+      const accountId = await member(1500);
+      const token = generateSessionToken();
+      await ownerPool.query(
+        `INSERT INTO public.sessions (token_hash, account_id, expires_at) VALUES ($1, $2, NOW() + INTERVAL '1 hour')`,
+        [hashSessionToken(token), accountId],
+      );
+      const headers = {
+        cookie: `${SESSION_COOKIE_NAME}=${token}`, origin: 'https://localhost:3000',
+        'content-type': 'application/json',
+      };
+      const input = { score: 500, gamesPlayed: 1, gamesWon: 1, currentStreak: 1, maxStreak: 1 };
+      const response = await postPuffdleScore(new Request('https://localhost:3000/api/puffdle/leaderboard', {
+        method: 'POST', headers, body: JSON.stringify(input),
+      }));
+      expect(response.status).toBe(200);
+      const readback = await getPuffdleBoard(new Request('https://localhost:3000/api/puffdle/leaderboard', { headers }));
+      expect(readback.status).toBe(200);
+      expect(await readback.json()).toMatchObject({
+        authenticated: true, personalBest: 500,
+        scores: [{ rank: 1, username: 'puffdler1500', score: 500, mine: true }],
+        stats: { gamesPlayed: 1, gamesWon: 1, currentStreak: 1, maxStreak: 1 },
+      });
+    });
+
+    it('preserves best scores and tie timestamps, records losses and ignores stale streak snapshots', async () => {
+      const accountId = await member(1501);
+      const win = { score: 500, gamesPlayed: 1, gamesWon: 1, currentStreak: 1, maxStreak: 1 };
+      await savePuffdleScore(accountId, win, runtimeUrl);
+      const before = await ownerPool.query('SELECT achieved_at FROM public.puff_puffdle_scores WHERE account_id = $1', [accountId]);
+      await savePuffdleScore(accountId, { ...win, score: 0, gamesPlayed: 2, currentStreak: 0 }, runtimeUrl);
+      await savePuffdleScore(accountId, win, runtimeUrl);
+      const after = await ownerPool.query('SELECT achieved_at FROM public.puff_puffdle_scores WHERE account_id = $1', [accountId]);
+      expect(after.rows[0].achieved_at).toEqual(before.rows[0].achieved_at);
+      expect(await getPuffdleLeaderboard(accountId, runtimeUrl)).toMatchObject({
+        personalBest: 500, stats: { gamesPlayed: 2, gamesWon: 1, currentStreak: 0, maxStreak: 1 },
+      });
+      await Promise.all([
+        savePuffdleScore(accountId, { ...win, score: 600, gamesPlayed: 3, gamesWon: 2 }, runtimeUrl),
+        savePuffdleScore(accountId, { ...win, score: 200 }, runtimeUrl),
+      ]);
+      expect((await getPuffdleLeaderboard(accountId, runtimeUrl)).personalBest).toBe(600);
+    });
+
+    it('sorts ties deterministically, hides ineligible accounts and limits the board to ten', async () => {
+      const accounts = [];
+      for (let i = 0; i < 12; i++) {
+        const id = await member(1510 + i);
+        accounts.push(id);
+        await savePuffdleScore(id, { score: 500 }, runtimeUrl);
+        await ownerPool.query("UPDATE public.puff_puffdle_scores SET achieved_at = TIMESTAMPTZ '2026-01-01' + $2 * INTERVAL '1 second' WHERE account_id = $1", [id, i]);
+      }
+      const full = await getPuffdleLeaderboard(accounts[11], runtimeUrl);
+      expect(full.scores).toHaveLength(10);
+      expect(full.scores.map(entry => entry.username)).toEqual(accounts.slice(0, 10).map((_, i) => `puffdler${1510 + i}`));
+      expect(full.personalBest).toBe(500);
+      expect(full.scores.some(entry => entry.mine)).toBe(false);
+      await ownerPool.query("UPDATE public.accounts SET access_status = 'suspended' WHERE id = $1", [accounts[0]]);
+      await ownerPool.query("UPDATE public.accounts SET membership_status = 'ineligible' WHERE id = $1", [accounts[1]]);
+      const filtered = await getPuffdleLeaderboard(accounts[11], runtimeUrl);
+      expect(filtered.scores[0].username).toBe('puffdler1512');
+      expect(filtered.scores[9].mine).toBe(true);
+    });
+
+    it('enforces score and stat constraints and least-privilege grants in Postgres', async () => {
+      const accountId = await member(1530);
+      for (const score of [-100, 1, 650, 1000000]) {
+        await expect(runtimePool.query('INSERT INTO public.puff_puffdle_scores (account_id, high_score) VALUES ($1, $2)', [accountId, score]))
+          .rejects.toMatchObject({ code: '23514' });
+      }
+      await expect(runtimePool.query('INSERT INTO public.puff_puffdle_scores (account_id, high_score, games_won) VALUES ($1, 500, 2)', [accountId]))
+        .rejects.toMatchObject({ code: '23514' });
+      await savePuffdleScore(accountId, { score: 500 }, runtimeUrl);
+      await expect(runtimePool.query('DELETE FROM public.puff_puffdle_scores WHERE account_id = $1', [accountId]))
+        .rejects.toMatchObject({ code: '42501' });
+      await expect(runtimePool.query('UPDATE public.puff_puffdle_scores SET account_id = $1 WHERE account_id = $1', [accountId]))
+        .rejects.toMatchObject({ code: '42501' });
+      await ownerPool.query('DELETE FROM public.accounts WHERE id = $1', [accountId]);
+      expect((await runtimePool.query('SELECT * FROM public.puff_puffdle_scores')).rowCount).toBe(0);
     });
   });
 

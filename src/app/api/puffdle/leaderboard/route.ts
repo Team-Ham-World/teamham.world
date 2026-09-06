@@ -14,10 +14,10 @@ import {
 } from "@/lib/auth/http";
 import {
   getPuffdleLeaderboard,
-  isValidPuffdleScore,
-  isValidPuffdleStat,
   savePuffdleScore,
 } from "@/lib/puffdle/leaderboard";
+
+import { isValidPuffdleScore, isValidPuffdleStats } from "@/lib/puffdle/contracts";
 
 function json(body: unknown, status = 200): Response {
   const headers = new Headers();
@@ -93,6 +93,31 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
+const MAX_BODY_BYTES = 2_048;
+
+async function readScoreBody(request: Request): Promise<unknown> {
+  const reader = request.body?.getReader();
+  if (!reader) throw new Error("Missing body");
+  const decoder = new TextDecoder();
+  let text = "";
+  let size = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      size += chunk.value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new RangeError("Body too large");
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode());
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function POST(request: Request): Promise<Response> {
   const member = await authenticate(request);
   if (member.kind === "response") return member.response;
@@ -103,11 +128,19 @@ export async function POST(request: Request): Promise<Response> {
     return json({ error: "invalid_request_origin" }, 403);
   }
 
+  if (request.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") {
+    return json({ error: "unsupported_media_type" }, 415);
+  }
+  if (Number(request.headers.get("content-length")) > MAX_BODY_BYTES) {
+    return json({ error: "request_body_too_large" }, 413);
+  }
   let body: unknown;
   try {
-    body = await request.json();
-  } catch {
-    return json({ error: "invalid_request_body" }, 400);
+    body = await readScoreBody(request);
+  } catch (error) {
+    return error instanceof RangeError
+      ? json({ error: "request_body_too_large" }, 413)
+      : json({ error: "invalid_request_body" }, 400);
   }
 
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -125,12 +158,8 @@ export async function POST(request: Request): Promise<Response> {
   const currentStreak = payload.currentStreak !== undefined ? payload.currentStreak : 0;
   const maxStreak = payload.maxStreak !== undefined ? payload.maxStreak : 0;
 
-  if (
-    !isValidPuffdleStat(gamesPlayed) ||
-    !isValidPuffdleStat(gamesWon) ||
-    !isValidPuffdleStat(currentStreak) ||
-    !isValidPuffdleStat(maxStreak)
-  ) {
+  const stats = { gamesPlayed, gamesWon, currentStreak, maxStreak };
+  if (!isValidPuffdleStats(stats)) {
     return json({ error: "invalid_stats" }, 400);
   }
 
@@ -139,10 +168,7 @@ export async function POST(request: Request): Promise<Response> {
       member.account.id,
       {
         score: payload.score,
-        gamesPlayed,
-        gamesWon,
-        currentStreak,
-        maxStreak,
+        ...stats,
       },
       member.databaseUrl,
     );

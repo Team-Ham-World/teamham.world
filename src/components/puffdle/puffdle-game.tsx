@@ -13,15 +13,14 @@ import {
   type PuffdleStats,
   type TileEvaluation,
 } from "@/lib/puffdle/game";
-import type {
-  PuffdleLeaderboardEntry,
-  PuffdleLeaderboardSnapshot,
-} from "@/lib/puffdle/leaderboard";
 import {
   getDailyWord,
   getRandomUnlimitedWord,
   isValidGuess,
 } from "@/lib/puffdle/words";
+
+import { parseStoredStats, restoreDailyGame } from "@/lib/puffdle/storage";
+import { usePuffdleLeaderboard } from "./use-puffdle-leaderboard";
 
 import styles from "./puffdle-game.module.css";
 import { PuffdleMascot } from "./puffdle-mascot";
@@ -37,69 +36,20 @@ const DAILY_STATE_PREFIX = "ham:puffdle:daily:v1:";
 
 type ModalView = "none" | "help" | "stats" | "leaderboard" | "gameover";
 
-type LeaderboardState =
-  | { status: "loading"; authenticated: false; username: null }
-  | { status: "signed-out"; authenticated: false; username: null }
-  | { status: "error"; authenticated: false; username: null }
-  | ({
-      status: "ready" | "saving";
-      authenticated: true;
-      username: string | null;
-    } & PuffdleLeaderboardSnapshot);
-
-function isLeaderboardEntry(value: unknown): value is PuffdleLeaderboardEntry {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const entry = value as Record<string, unknown>;
-  return (
-    Number.isInteger(entry.rank) &&
-    typeof entry.username === "string" &&
-    Number.isInteger(entry.score) &&
-    typeof entry.mine === "boolean"
-  );
-}
-
-function parseLeaderboardPayload(value: unknown): LeaderboardState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const payload = value as Record<string, unknown>;
-  if (payload.authenticated === false) {
-    return { status: "signed-out", authenticated: false, username: null };
-  }
-  if (
-    payload.authenticated !== true ||
-    !(typeof payload.username === "string" || payload.username === null) ||
-    !Number.isInteger(payload.personalBest) ||
-    !payload.stats ||
-    typeof payload.stats !== "object" ||
-    !Array.isArray(payload.scores) ||
-    !payload.scores.every(isLeaderboardEntry)
-  ) {
-    return null;
-  }
-  return {
-    status: "ready",
-    authenticated: true,
-    username: payload.username,
-    personalBest: payload.personalBest as number,
-    stats: payload.stats as PuffdleLeaderboardSnapshot["stats"],
-    scores: payload.scores,
-  };
-}
-
-export function PuffdleGame() {
+export function PuffdleGame({ initialDaily }: { initialDaily?: ReturnType<typeof getDailyWord> } = {}) {
+  const [ready, setReady] = useState(false);
   const [mode, setMode] = useState<GameMode>("daily");
   const [gameState, setGameState] = useState<PuffdleGameState>(() => {
-    const daily = getDailyWord();
+    const daily = initialDaily ?? getDailyWord();
     return createInitialPuffdleState(daily.word, "daily", daily.dayNumber);
   });
   const [stats, setStats] = useState<PuffdleStats>(createDefaultStats);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isShaking, setIsShaking] = useState(false);
   const [modal, setModal] = useState<ModalView>("none");
-  const [leaderboard, setLeaderboard] = useState<LeaderboardState>({
-    status: "loading",
-    authenticated: false,
-    username: null,
-  });
+  const { leaderboard, saveStatus, submitMemberScore, retrySave, loadLeaderboard } = usePuffdleLeaderboard();
+  const gameoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shakeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -111,51 +61,26 @@ export function PuffdleGame() {
     }, durationMs);
   }, []);
 
-  // Fetch leaderboard data
-  const loadLeaderboard = useCallback(async () => {
-    try {
-      const response = await fetch("/api/puffdle/leaderboard", {
-        credentials: "same-origin",
-        cache: "no-store",
-      });
-      if (response.status === 404) {
-        setLeaderboard({ status: "signed-out", authenticated: false, username: null });
-        return;
-      }
-      if (!response.ok) throw new Error("Leaderboard unavailable");
-      const parsed = parseLeaderboardPayload(await response.json());
-      if (!parsed) throw new Error("Invalid leaderboard response");
-      setLeaderboard(parsed);
-    } catch {
-      setLeaderboard({ status: "error", authenticated: false, username: null });
-    }
-  }, []);
-
   // Load saved stats and daily state on initial client mount
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       try {
         const savedStats = localStorage.getItem(LOCAL_STATS_KEY);
         if (savedStats) {
-          const parsed = JSON.parse(savedStats) as PuffdleStats;
-          if (
-            Number.isInteger(parsed.gamesPlayed) &&
-            Number.isInteger(parsed.gamesWon) &&
-            parsed.guessDistribution
-          ) {
-            setStats(parsed);
-          }
+          const parsed = parseStoredStats(JSON.parse(savedStats));
+          if (parsed) setStats(parsed);
         }
       } catch {
         // LocalStorage might be restricted
       }
 
       const daily = getDailyWord();
+      setGameState(createInitialPuffdleState(daily.word, "daily", daily.dayNumber));
       try {
         const savedDailyState = localStorage.getItem(`${DAILY_STATE_PREFIX}${daily.dayNumber}`);
         if (savedDailyState) {
-          const parsed = JSON.parse(savedDailyState) as PuffdleGameState;
-          if (parsed && parsed.targetWord && parsed.dayNumber === daily.dayNumber) {
+          const parsed = restoreDailyGame(JSON.parse(savedDailyState), daily);
+          if (parsed) {
             setGameState(parsed);
             if (parsed.status !== "IN_PROGRESS") {
               setModal("gameover");
@@ -165,12 +90,16 @@ export function PuffdleGame() {
       } catch {
         // Ignore storage errors
       }
-
-      void loadLeaderboard();
+      setReady(true);
     });
 
-    return () => cancelAnimationFrame(frame);
-  }, [loadLeaderboard]);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (shakeTimerRef.current) clearTimeout(shakeTimerRef.current);
+      if (gameoverTimerRef.current) clearTimeout(gameoverTimerRef.current);
+    };
+  }, []);
 
   // Sync Daily game state to local storage
   const persistDailyState = useCallback((stateToSave: PuffdleGameState) => {
@@ -185,43 +114,12 @@ export function PuffdleGame() {
     }
   }, []);
 
-  // Submit high score to backend API if member is authenticated
-  const submitMemberScore = useCallback(
-    async (points: number, updatedStats: PuffdleStats) => {
-      if (!leaderboard.authenticated) return;
-      setLeaderboard({ ...leaderboard, status: "saving" });
-      try {
-        const response = await fetch("/api/puffdle/leaderboard", {
-          method: "POST",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            score: points,
-            gamesPlayed: updatedStats.gamesPlayed,
-            gamesWon: updatedStats.gamesWon,
-            currentStreak: updatedStats.currentStreak,
-            maxStreak: updatedStats.maxStreak,
-          }),
-        });
-        if (!response.ok) throw new Error("Score submission failed");
-        const parsed = parseLeaderboardPayload(await response.json());
-        if (!parsed || !parsed.authenticated) throw new Error("Invalid response");
-        setLeaderboard(parsed);
-      } catch {
-        setLeaderboard((current) =>
-          current.authenticated
-            ? { ...current, status: "ready" }
-            : { status: "error", authenticated: false, username: null },
-        );
-      }
-    },
-    [leaderboard],
-  );
-
   // Switch between Daily and Unlimited modes
   const handleModeChange = useCallback(
     (newMode: GameMode) => {
       if (newMode === mode) return;
+      if (gameoverTimerRef.current) clearTimeout(gameoverTimerRef.current);
+      setModal("none");
       setMode(newMode);
       setToastMessage(null);
 
@@ -230,8 +128,8 @@ export function PuffdleGame() {
         try {
           const saved = localStorage.getItem(`${DAILY_STATE_PREFIX}${daily.dayNumber}`);
           if (saved) {
-            const parsed = JSON.parse(saved) as PuffdleGameState;
-            if (parsed && parsed.dayNumber === daily.dayNumber) {
+            const parsed = restoreDailyGame(JSON.parse(saved), daily);
+            if (parsed) {
               setGameState(parsed);
               return;
             }
@@ -250,16 +148,43 @@ export function PuffdleGame() {
 
   // Start fresh Unlimited game
   const startNewUnlimitedGame = useCallback(() => {
+    if (gameoverTimerRef.current) clearTimeout(gameoverTimerRef.current);
     const word = getRandomUnlimitedWord();
     setGameState(createInitialPuffdleState(word, "unlimited"));
     setModal("none");
     showToast("NEW UNLIMITED GAME STARTED");
   }, [showToast]);
 
+  const refreshDaily = useCallback(() => {
+    if (mode !== "daily") return false;
+    const daily = getDailyWord();
+    if (daily.dayNumber === gameState.dayNumber) return false;
+    if (gameoverTimerRef.current) clearTimeout(gameoverTimerRef.current);
+    let next = createInitialPuffdleState(daily.word, "daily", daily.dayNumber);
+    try {
+      const saved = localStorage.getItem(`${DAILY_STATE_PREFIX}${daily.dayNumber}`);
+      if (saved) next = restoreDailyGame(JSON.parse(saved), daily) ?? next;
+    } catch { /* Storage can be unavailable. */ }
+    setGameState(next);
+    setModal("none");
+    showToast("A NEW DAILY PUFFDLE IS READY");
+    return true;
+  }, [mode, gameState.dayNumber, showToast]);
+
+  useEffect(() => {
+    const interval = setInterval(refreshDaily, 30_000);
+    document.addEventListener("visibilitychange", refreshDaily);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshDaily);
+    };
+  }, [refreshDaily]);
+
   // Handle letter typing
   const handleKeyInput = useCallback(
     (key: string) => {
-      if (modal !== "none" && modal !== "gameover") return;
+      if (!ready || refreshDaily()) return;
+      if (modal !== "none") return;
       if (gameState.status !== "IN_PROGRESS") return;
 
       const upperKey = key.toUpperCase();
@@ -268,14 +193,16 @@ export function PuffdleGame() {
         if (gameState.currentGuess.length < 5) {
           setIsShaking(true);
           showToast("NOT ENOUGH LETTERS");
-          setTimeout(() => setIsShaking(false), 500);
+          if (shakeTimerRef.current) clearTimeout(shakeTimerRef.current);
+          shakeTimerRef.current = setTimeout(() => setIsShaking(false), 500);
           return;
         }
 
         if (!isValidGuess(gameState.currentGuess)) {
           setIsShaking(true);
           showToast("NOT IN WORD LIST");
-          setTimeout(() => setIsShaking(false), 500);
+          if (shakeTimerRef.current) clearTimeout(shakeTimerRef.current);
+          shakeTimerRef.current = setTimeout(() => setIsShaking(false), 500);
           return;
         }
 
@@ -295,12 +222,13 @@ export function PuffdleGame() {
 
           if (isWon) {
             showToast(`SOLVED IN ${nextState.guesses.length} GUESSES! +${nextState.pointsEarned} PTS`, 2400);
-            void submitMemberScore(nextState.pointsEarned, updatedStats);
+
           } else {
             showToast(`OUT OF ATTEMPTS! WORD: ${nextState.targetWord}`, 3000);
           }
 
-          setTimeout(() => {
+          submitMemberScore(nextState.pointsEarned, updatedStats);
+          gameoverTimerRef.current = setTimeout(() => {
             setModal("gameover");
           }, 1400);
         }
@@ -326,13 +254,18 @@ export function PuffdleGame() {
         }
       }
     },
-    [gameState, modal, persistDailyState, showToast, stats, submitMemberScore],
+    [gameState, modal, persistDailyState, showToast, stats, submitMemberScore, refreshDaily, ready],
   );
 
   // Physical keyboard event listener
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (
+        target.isContentEditable || target.closest("input, textarea, select") ||
+        (event.code === "Enter" && target.closest("button, a"))
+      )) return;
       if (event.code === "Escape") {
         setModal("none");
         return;
@@ -358,11 +291,15 @@ export function PuffdleGame() {
   }, [handleKeyInput]);
 
   // Copy share emoji grid to clipboard
-  const handleShare = useCallback(() => {
+  const handleShare = useCallback(async () => {
     const grid = generateShareGrid(gameState);
     if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(grid);
-      showToast("COPIED TO CLIPBOARD!");
+      try {
+        await navigator.clipboard.writeText(grid);
+        showToast("COPIED TO CLIPBOARD!");
+      } catch {
+        showToast("UNABLE TO ACCESS CLIPBOARD");
+      }
     } else {
       showToast("UNABLE TO ACCESS CLIPBOARD");
     }
@@ -381,6 +318,17 @@ export function PuffdleGame() {
     <div className={styles.gameContainer}>
       {/* Main Game Column */}
       <div className={styles.mainColumn}>
+        <div aria-live="polite" className="text-sm text-muted">
+          {!ready && <p>Loading your saved game…</p>}
+          {saveStatus === "saving" && <p>Saving your result to the member board…</p>}
+          {saveStatus === "saved" && <p>Result saved to the member board.</p>}
+          {saveStatus === "error" && (
+            <p role="alert">
+              Your result could not be saved to the member board. Keep this page open to retry. {" "}
+              <button type="button" className="font-bold underline" onClick={() => void retrySave()}>Retry save</button>
+            </p>
+          )}
+        </div>
         {/* Header Block */}
         <header className={styles.headerBlock}>
           <div className={styles.topRow}>
@@ -411,7 +359,7 @@ export function PuffdleGame() {
               <button
                 type="button"
                 className={styles.iconButton}
-                onClick={() => setModal("leaderboard")}
+                onClick={() => { setModal("leaderboard"); void loadLeaderboard(); }}
                 aria-label="Member leaderboard"
               >
                 [*] RANKS
@@ -424,6 +372,7 @@ export function PuffdleGame() {
             <button
               type="button"
               role="tab"
+              disabled={!ready}
               aria-selected={mode === "daily"}
               className={`${styles.modeTab} ${mode === "daily" ? styles.modeTabActive : ""}`}
               onClick={() => handleModeChange("daily")}
@@ -433,6 +382,7 @@ export function PuffdleGame() {
             <button
               type="button"
               role="tab"
+              disabled={!ready}
               aria-selected={mode === "unlimited"}
               className={`${styles.modeTab} ${mode === "unlimited" ? styles.modeTabActive : ""}`}
               onClick={() => handleModeChange("unlimited")}
@@ -514,6 +464,7 @@ export function PuffdleGame() {
                   <button
                     key={key}
                     type="button"
+                    disabled={!ready}
                     onClick={() => handleKeyInput(key)}
                     className={`${styles.key} ${isSpecial ? styles.keySpecial : ""} ${statusClass}`}
                   >
@@ -581,8 +532,9 @@ export function PuffdleGame() {
                     </div>
                   </div>
 
+                  <p>Scores range from 600 points for a first-guess solve to 100 for a sixth-guess solve. The member board ranks your best single game.</p>
                   <p>
-                    <strong>Daily Puffdle</strong> cycles through words deterministically so words never repeat. <strong>Puffdle Unlimited</strong> gives you endless games anytime.
+                    <strong>Daily Puffdle</strong> uses the same word for everyone each UTC day. Words repeat only after the full word list has cycled. <strong>Puffdle Unlimited</strong> gives you endless games anytime.
                   </p>
                 </div>
                 <div className={styles.modalActions}>
@@ -697,13 +649,14 @@ export function PuffdleGame() {
 
                 {leaderboard.status === "signed-out" && (
                   <div className={styles.memberNotice}>
-                    Sign in with Discord as a verified Team HAM member to compete on the shared leaderboard and record high scores.
+                    <a href="/account" className="font-bold underline">Sign in with Discord</a> as a verified Team HAM member to compete on the shared leaderboard and record high scores.
                   </div>
                 )}
 
                 {leaderboard.status === "error" && (
                   <div className={styles.memberNotice}>
-                    The leaderboard service is currently offline. Your personal scores remain saved locally.
+                    The member board could not be loaded. You can keep playing locally. {" "}
+                    <button type="button" className="font-bold underline" onClick={() => void loadLeaderboard()}>Retry leaderboard</button>
                   </div>
                 )}
 
