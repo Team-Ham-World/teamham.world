@@ -124,7 +124,7 @@ function PuffcadeGameCard({ listing }: Readonly<{ listing: PuffcadeGameListing }
       href={listing.href}
       prefetch={false}
       aria-label={`Play ${listing.title}`}
-      className="grid w-full cursor-pointer gap-6 border-2 border-ink bg-surface p-5 text-left shadow-[6px_6px_0_0_var(--color-ink)] transition-[transform,background-color,box-shadow] hover:-translate-y-0.5 hover:bg-paper active:translate-x-1 active:translate-y-1 active:shadow-none sm:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] sm:gap-8 sm:p-7"
+      className="grid w-full cursor-pointer gap-6 border-2 border-ink bg-surface p-5 text-left shadow-[6px_6px_0_0_var(--color-ink)] transition-[transform,background-color,box-shadow] hover:-translate-y-0.5 hover:bg-paper active:translate-x-1 active:translate-y-1 active:shadow-none sm:gap-8 sm:p-7"
     >
       <span
         aria-hidden="true"
@@ -140,7 +140,7 @@ function PuffcadeGameCard({ listing }: Readonly<{ listing: PuffcadeGameListing }
         </span>
       </span>
 
-      <span className="min-w-0 self-center">
+      <span className="min-w-0">
         <span className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 pb-1">
           <span className="font-display text-3xl leading-tight sm:text-4xl">
             {listing.title}
@@ -166,7 +166,7 @@ function PuffcadeGameCard({ listing }: Readonly<{ listing: PuffcadeGameListing }
 
 export function PuffcadeGamePicker() {
   return (
-    <div className="mt-12 grid max-w-5xl gap-8">
+    <div className="mt-12 grid max-w-5xl gap-8 md:grid-cols-2">
       {GAME_LISTINGS.map((listing) => (
         <PuffcadeGameCard key={listing.href} listing={listing} />
       ))}

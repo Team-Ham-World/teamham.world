@@ -313,27 +313,52 @@ test.describe("Puffcade", () => {
     await expect(page).toHaveURL(/\/$/);
   });
 
-  test("stacks the card on mobile and splits it on desktop", async ({ page }) => {
+  test("puts details under the artwork and pairs cards into two columns on desktop", async ({
+    page,
+  }) => {
     await page.goto("/puffcade");
-    const card = page.getByRole("link", { name: "Play Flappy Puff" });
-    const artwork = card.locator('span[aria-hidden="true"]').first();
-    const title = card.getByText("Flappy Puff", { exact: true });
+    const firstCard = page.getByRole("link", { name: "Play Flappy Puff" });
+    const secondCard = page.getByRole("link", { name: "Play Puff Print Run" });
+    const artwork = firstCard.locator('span[aria-hidden="true"]').first();
+    const title = firstCard.getByText("Flappy Puff", { exact: true });
 
     const desktopArtwork = await artwork.boundingBox();
     const desktopTitle = await title.boundingBox();
-    if (!desktopArtwork || !desktopTitle) {
-      throw new Error("The desktop Puffcade card did not produce layout boxes.");
+    const desktopFirstCard = await firstCard.boundingBox();
+    const desktopSecondCard = await secondCard.boundingBox();
+    if (
+      !desktopArtwork ||
+      !desktopTitle ||
+      !desktopFirstCard ||
+      !desktopSecondCard
+    ) {
+      throw new Error("The desktop Puffcade catalog did not produce layout boxes.");
     }
-    expect(desktopArtwork.x).toBeLessThan(desktopTitle.x);
+    // The card text sits under the artwork, not beside it.
+    expect(desktopArtwork.y + desktopArtwork.height).toBeLessThanOrEqual(
+      desktopTitle.y,
+    );
+    // Two catalog cards share one desktop row: same top edge, side by side.
+    expect(Math.abs(desktopSecondCard.y - desktopFirstCard.y)).toBeLessThanOrEqual(1);
+    expect(desktopSecondCard.x).toBeGreaterThanOrEqual(
+      desktopFirstCard.x + desktopFirstCard.width,
+    );
 
     await page.setViewportSize({ width: 390, height: 844 });
     const mobileArtwork = await artwork.boundingBox();
     const mobileTitle = await title.boundingBox();
-    if (!mobileArtwork || !mobileTitle) {
-      throw new Error("The mobile Puffcade card did not produce layout boxes.");
+    const mobileFirstCard = await firstCard.boundingBox();
+    const mobileSecondCard = await secondCard.boundingBox();
+    if (!mobileArtwork || !mobileTitle || !mobileFirstCard || !mobileSecondCard) {
+      throw new Error("The mobile Puffcade catalog did not produce layout boxes.");
     }
     expect(mobileArtwork.y + mobileArtwork.height).toBeLessThanOrEqual(
       mobileTitle.y,
+    );
+    // The catalog collapses to one column: cards share an edge and stack.
+    expect(Math.abs(mobileSecondCard.x - mobileFirstCard.x)).toBeLessThanOrEqual(1);
+    expect(mobileSecondCard.y).toBeGreaterThanOrEqual(
+      mobileFirstCard.y + mobileFirstCard.height,
     );
     expect(
       await page.evaluate(
