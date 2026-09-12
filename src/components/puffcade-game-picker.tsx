@@ -67,6 +67,27 @@ const GAME_LISTINGS: PuffcadeGameListing[] = [
     },
   },
   {
+    title: "Suipuff",
+    href: "/puffcade/suipuff",
+    detail: "ASCII arcade · 1 player",
+    description:
+      "Drop Puffs into the tray. Matching pairs merge into bigger Puffs — just keep the pile under the line.",
+    art: {
+      cols: 42,
+      rows: 28,
+      cellAspect: 0.6 / 0.74,
+      pose: {
+        time: 2.7,
+        bob: 0,
+        squash: 0.3,
+        blink: 1,
+        gazeX: 0.02,
+        gazeY: 0.09,
+      },
+      view: { yaw: 0.05, pitch: -0.12 },
+    },
+  },
+  {
     title: "Puffdle",
     href: "/puffcade/puffdle",
     detail: "Word puzzle · Daily + unlimited",

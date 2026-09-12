@@ -934,3 +934,260 @@ test.describe("Puff Print Run", () => {
     ).toHaveCount(0);
   });
 });
+
+test.describe("Suipuff", () => {
+  test.beforeEach(async () => {
+    await skipUnlessAppUp();
+  });
+
+  test("is discoverable from the catalog beside the other games", async ({
+    page,
+  }) => {
+    await page.goto("/puffcade");
+
+    const card = page.getByRole("link", { name: "Play Suipuff" });
+    await expect(card).toHaveCount(1);
+    await expect(card).toHaveAttribute("href", "/puffcade/suipuff");
+    await expect(card.getByText("PLAYABLE", { exact: true })).toBeVisible();
+  });
+
+  test("serves at its own route with metadata and a fullscreen shell", async ({
+    page,
+  }) => {
+    const response = await page.goto("/puffcade/suipuff");
+
+    expect(response?.status()).toBe(200);
+    await expect(page).toHaveTitle("Suipuff");
+    await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+      "href",
+      "https://teamham.world/puffcade/suipuff",
+    );
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+      "content",
+      "noindex, nofollow",
+    );
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+    await expect(
+      game.getByRole("heading", { level: 1, name: "SUIPUFF.EXE" }),
+    ).toBeVisible();
+    await expect(game.locator("[data-suipuff-canvas]")).toBeVisible();
+    await expect(
+      game.getByRole("button", { name: /start dropping/i }),
+    ).toBeVisible();
+    await expect(
+      game.getByRole("button", { name: /exit transmission/i }),
+    ).toBeVisible();
+
+    await expect(page.locator("body > header")).toBeHidden();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+  });
+
+  test("starts via the button and via Space", async ({ page }) => {
+    await page.goto("/puffcade/suipuff");
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    const startButton = game.getByRole("button", { name: /start dropping/i });
+    await expect(startButton).toBeVisible();
+    // The canvas gets its backing size in the same mount effects that bind the
+    // click and keydown handlers — a non-zero width proves input is live.
+    await expect
+      .poll(() =>
+        game
+          .locator("[data-suipuff-canvas]")
+          .evaluate((el) => (el as HTMLCanvasElement).width),
+      )
+      .toBeGreaterThan(0);
+    await startButton.click();
+    await expect(startButton).toHaveCount(0);
+
+    // Pause, resume, pause again, then leave through the pause menu's exit
+    // button before reloading to start with Space instead.
+    await page.keyboard.press("Escape");
+    await expect(
+      game.getByRole("button", { name: /^resume$/i }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(
+      game.getByRole("button", { name: /^resume$/i }),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await game.getByRole("button", { name: /^exit game$/i }).click();
+    await expect(page).toHaveURL(/\/puffcade$/);
+
+    await page.goto("/puffcade/suipuff");
+    await expect(
+      game.getByRole("button", { name: /start dropping/i }),
+    ).toBeVisible();
+    // The canvas gets its backing size in the same mount effects that bind the
+    // keydown listener — a non-zero width proves Space will be heard.
+    await expect
+      .poll(() =>
+        game
+          .locator("[data-suipuff-canvas]")
+          .evaluate((el) => (el as HTMLCanvasElement).width),
+      )
+      .toBeGreaterThan(0);
+    await page.keyboard.press("Space");
+    await expect(
+      game.getByRole("button", { name: /start dropping/i }),
+    ).toHaveCount(0);
+  });
+
+  test("Escape pauses and resumes while playing, and exits from ready", async ({
+    page,
+  }) => {
+    await page.goto("/puffcade/suipuff");
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    // A non-zero canvas backing size proves mount effects (and input
+    // listeners) are live.
+    await expect
+      .poll(() =>
+        game
+          .locator("[data-suipuff-canvas]")
+          .evaluate((el) => (el as HTMLCanvasElement).width),
+      )
+      .toBeGreaterThan(0);
+    await game.getByRole("button", { name: /start dropping/i }).click();
+
+    await page.keyboard.press("Escape");
+    await expect(game.getByRole("button", { name: /^resume$/i })).toBeVisible();
+
+    // A second Escape resumes — the same contract Flappy Puff ships.
+    await page.keyboard.press("Escape");
+    await expect(
+      game.getByRole("button", { name: /^resume$/i }),
+    ).toHaveCount(0);
+    await expect(game).toBeVisible();
+
+    // From the ready screen, Escape leaves the game entirely.
+    await page.goto("/puffcade/suipuff");
+    await expect(
+      game.getByRole("button", { name: /start dropping/i }),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page).toHaveURL(/\/puffcade$/);
+    await expect(
+      page.locator('[data-arcade-shell="fullscreen"]'),
+    ).toHaveCount(0);
+  });
+
+  test("explicit exit replaces history so Back cannot reopen the game", async ({
+    page,
+  }) => {
+    await page.goto("/puffcade");
+    await page.getByRole("link", { name: "Play Suipuff" }).click();
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+
+    await game.getByRole("button", { name: /exit transmission/i }).click();
+    await expect(page).toHaveURL(/\/puffcade$/);
+    await expect(
+      page.getByRole("link", { name: "Play Suipuff" }),
+    ).toBeVisible();
+
+    await page.goBack();
+    await expect(page).not.toHaveURL(/\/puffcade\/suipuff/);
+    await expect(
+      page.locator('[data-arcade-shell="fullscreen"]'),
+    ).toHaveCount(0);
+  });
+
+  test("renders gameplay from baked sprites without live text rasterization", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const fillText = CanvasRenderingContext2D.prototype.fillText;
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      Reflect.set(CanvasRenderingContext2D.prototype, "drawImage", function (
+        this: CanvasRenderingContext2D,
+        ...args: unknown[]
+      ) {
+        if (this.canvas.isConnected) {
+          this.canvas.dataset.imageDraws = String(Number(this.canvas.dataset.imageDraws ?? 0) + 1);
+        }
+        return Reflect.apply(drawImage, this, args);
+      });
+
+      Reflect.set(
+        CanvasRenderingContext2D.prototype,
+        "fillText",
+        function (
+          this: CanvasRenderingContext2D,
+          text: string,
+          x: number,
+          y: number,
+          maxWidth?: number,
+        ) {
+          if (this.canvas.isConnected) {
+            const calls = this.canvas.dataset.connectedFillTextCalls;
+            this.canvas.dataset.connectedFillTextCalls = calls
+              ? `${calls}\n${text}`
+              : text;
+          }
+
+          return maxWidth === undefined
+            ? fillText.call(this, text, x, y)
+            : fillText.call(this, text, x, y, maxWidth);
+        },
+      );
+    });
+    await page.goto("/puffcade/suipuff");
+
+    const game = page.locator('[data-arcade-shell="fullscreen"]');
+    await expect(game).toBeVisible();
+    const canvas = game.locator("[data-suipuff-canvas]");
+    await expect
+      .poll(() => canvas.evaluate((el) => (el as HTMLCanvasElement).width))
+      .toBeGreaterThan(0);
+    await page.evaluate(() => {
+      for (const target of document.querySelectorAll("canvas")) {
+        delete target.dataset.connectedFillTextCalls;
+        delete target.dataset.imageDraws;
+      }
+    });
+
+    // Start, drop a piece with a canvas click, and let several frames render.
+    await game.getByRole("button", { name: /start dropping/i }).click();
+    const box = await canvas.boundingBox();
+    if (box) {
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 3);
+    }
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          let frames = 0;
+          const onFrame = () => {
+            frames += 1;
+            if (frames === 8) {
+              resolve();
+              return;
+            }
+            requestAnimationFrame(onFrame);
+          };
+          requestAnimationFrame(onFrame);
+        }),
+    );
+
+    const calls = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("canvas"))
+        .filter((target) => target.isConnected)
+        .flatMap((target) =>
+          (target.dataset.connectedFillTextCalls ?? "")
+            .split("\n")
+            .filter(Boolean),
+        ),
+    );
+    expect(calls).toEqual([]);
+    expect(
+      await canvas.evaluate((el) => Number(el.dataset.imageDraws ?? 0)),
+    ).toBeGreaterThan(0);
+  });
+});
