@@ -40,6 +40,15 @@ central session, or confirmed ineligibility invalidates its game tokens.
 
 ## Authorization flow
 
+Strokies runs at `https://strokies.cyr1en.dev`. Migration
+`0013_strokies_oauth_callback.sql` permits only client ID `strokies` with the exact
+callback `https://strokies.cyr1en.dev/api/auth/callback`. The application validator
+matches that exact URI too; no other `cyr1en.dev` host, path, query or port is allowed.
+This external hostname is controlled by the deployer and cannot be assigned through
+HAM member-subdomain delegation. Its backend secret lives only in the Oracle host's
+private environment; HAM stores its SHA-256 hash. Scope remains `identity` and
+audience remains `urn:teamham:game:strokies`.
+
 1. Register the reviewed backend's client ID, hashed secret, exact HTTPS
    callback, and `urn:teamham:game:<client_id>` audience through the database
    owner. Follow the [reserved-subdomain rule](../README.md#game-oauth-clients-and-delegated-subdomains)
