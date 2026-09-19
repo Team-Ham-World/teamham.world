@@ -148,7 +148,7 @@ out of reach of the app entirely: `app_runtime_role` holds `SELECT` alone on
 
 The mitigation is therefore a naming rule rather than a schema change:
 
-> **The host label of every game OAuth client must be present in
+> **The host label of every HAM-hosted game OAuth client must be present in
 > `RESERVED_SUBDOMAINS` (`src/lib/members/model.ts`) before the client row is
 > inserted.**
 
@@ -161,7 +161,15 @@ Narrowing the CHECK to name those hosts exactly was considered and deliberately
 deferred: no game client is registered yet, and the only game project's slug is
 still marked provisional, so a constraint written now would be pinned to guessed
 labels and need rewriting once the names settle. Tighten it in the same
-migration that registers the first real client.
+migration that registers a HAM-hosted client.
+
+The externally hosted Strokies backend has one explicitly reviewed exception:
+client `strokies` may use exactly
+`https://strokies.cyr1en.dev/api/auth/callback`. Migration
+`0013_strokies_oauth_callback.sql` and the application validator enforce this
+exception without accepting other external hosts or paths. This hostname is not
+part of HAM's member-subdomain delegation system. Registration remains an owner
+operation, with only a hashed secret stored in HAM.
 
 ## Note
 

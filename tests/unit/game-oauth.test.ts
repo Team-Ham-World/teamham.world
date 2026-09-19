@@ -215,6 +215,26 @@ describe('lib/auth/game-oauth', () => {
 
   describe('2. Redirect URI validation', () => {
     describe('Production mode', () => {
+      it('accepts only the reviewed external Strokies callback', () => {
+        for (const mode of ['production', 'development'] as const) {
+          expect(isValidGameRedirectUri('https://strokies.cyr1en.dev/api/auth/callback', mode)).toBe(true);
+          for (const uri of [
+            'http://strokies.cyr1en.dev/api/auth/callback',
+            'https://strokies.cyr1en.dev/',
+            'https://strokies.cyr1en.dev/other',
+            'https://strokies.cyr1en.dev/api/auth/callback/',
+            'https://strokies.cyr1en.dev/api/auth/callback?next=evil',
+            'https://strokies.cyr1en.dev/api/auth/callback#fragment',
+            'https://strokies.cyr1en.dev:8443/api/auth/callback',
+            'https://user@strokies.cyr1en.dev/api/auth/callback',
+            'https://other.cyr1en.dev/api/auth/callback',
+            'https://strokies.cyr1en.dev.evil.example/api/auth/callback',
+          ]) {
+            expect(isValidGameRedirectUri(uri, mode)).toBe(false);
+          }
+        }
+      });
+
       it('accepts valid non-apex HTTPS *.teamham.world subdomains with non-root path', () => {
         expect(isValidGameRedirectUri('https://poker.teamham.world/auth/callback', 'production')).toBe(true);
         expect(isValidGameRedirectUri('https://chess-v2.sub.teamham.world/callback', 'production')).toBe(true);

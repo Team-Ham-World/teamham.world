@@ -85,6 +85,10 @@ export function isValidGameRedirectUri(
   if (!uri || typeof uri !== 'string' || Buffer.byteLength(uri, 'utf8') > GAME_REDIRECT_URI_MAX_BYTES) {
     return false;
   }
+  // Reviewed external backend: allow this exact callback, never arbitrary cyr1en.dev hosts or paths.
+  if (uri === 'https://strokies.cyr1en.dev/api/auth/callback') {
+    return true;
+  }
   try {
     const parsed = new URL(uri);
     // Protocol must strictly be HTTPS
