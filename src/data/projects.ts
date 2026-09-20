@@ -64,6 +64,23 @@ export function hasExpandableContent(project: Project): boolean {
 
 export const PROJECTS: Project[] = [
   {
+    slug: "strokies",
+    name: "strokies.",
+    shortDescription:
+      "Bad drawings. Great company. Draw, guess, and laugh with your friends in this multiplayer drawing and guessing game.",
+    type: "game",
+    status: "playable",
+    makers: [],
+    featured: false,
+    links: {
+      publicUrl: "https://strokies.teamham.world",
+    },
+    artwork: {
+      src: "/project-art/strokies-v1.jpg",
+      alt: "Strokies: Bad drawings. Great company. Laughing friends and a goofy cat drawing.",
+    },
+  },
+  {
     // Provisional slug — must be finalized before any external sharing.
     slug: "untitled-quiz-show",
     name: "Untitled quiz-show game",
