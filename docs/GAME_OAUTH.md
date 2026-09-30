@@ -79,6 +79,13 @@ There is no refresh-token, implicit, password, or public-client grant.
 
 ## Verification and operations
 
+Pusoy Dos uses client `pusoy`, audience `urn:teamham:game:pusoy`, and the exact
+callback `https://pusoy.teamham.world/api/auth/callback`. Its subdomain is
+reserved in `RESERVED_SUBDOMAINS`. The owner registration script is
+`scripts/register-pusoy.sql`; supply only the SHA-256 hash to that script.
+The plaintext client secret belongs in the Pusoy Cloudflare Worker's secret
+bindings, never in source control or frontend assets.
+
 OAuth route regressions live in `tests/integration/oauth-flow.test.ts` and
 `tests/integration/game-auth-flow.test.ts`; real PostgreSQL tests in
 `tests/integration/db-queries.test.ts` cover replay races, redirect registration

@@ -57,6 +57,7 @@ export const RESERVED_SUBDOMAINS: ReadonlySet<string> = new Set([
   "games",
   "play",
   "puff",
+  "pusoy",
   "quiz",
   "admin",
   "api",
