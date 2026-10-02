@@ -64,6 +64,23 @@ export function hasExpandableContent(project: Project): boolean {
 
 export const PROJECTS: Project[] = [
   {
+    slug: "pusoy",
+    name: "Pusoy Dos",
+    shortDescription:
+      "The Filipino shedding game for four to six players. Deal a private table with friends, or practice against bots.",
+    type: "game",
+    status: "playable",
+    makers: [],
+    featured: false,
+    links: {
+      publicUrl: "https://pusoy.teamham.world",
+    },
+    artwork: {
+      src: "/project-art/pusoy-v1.jpg",
+      alt: "Pusoy Dos by HAM: 4–6 players. One table. Tara, laro! A fanned hand of playing cards.",
+    },
+  },
+  {
     slug: "strokies",
     name: "strokies.",
     shortDescription:
