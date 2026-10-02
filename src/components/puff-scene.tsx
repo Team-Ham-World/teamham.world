@@ -44,21 +44,27 @@ const CELL_LINE_RATIO = 0.74;
 
 /** A slight turn toward the headline, without hiding the far eye. */
 const REST_YAW = -0.12;
-const LOOK_YAW = 0.42;
-const LOOK_PITCH = 0.24;
-const LOOK_DEPTH_RATIO = 1.15;
+const LOOK_YAW = 0.44;
+const LOOK_PITCH = 0.22;
+/**
+ * The pointer's offset is measured against the distance from Puff to the
+ * viewport edge on that side, so the whole window maps onto the whole turn
+ * instead of saturating a short way past the mascot. The floor keeps a mascot
+ * near an edge from snapping to full turn over a few pixels.
+ */
+const MIN_LOOK_REACH = 220;
+/** Below 1 gives the pointer more pull near Puff, where it is looked at. */
+const LOOK_CURVE = 0.8;
 
-/* The eyes lead quickly; the heavier body only follows after they run out of
-   room, then stops once they have nearly re-centred. */
-const EYE_YAW_LIMIT = 0.13;
-const EYE_PITCH_LIMIT = 0.09;
-const EYE_GAZE_X = 0.055;
-const EYE_GAZE_Y = 0.04;
-const EYE_RESPONSE = 20;
-const BODY_RESPONSE = 4.5;
+/* The eyes lead quickly and the heavier body turns continuously behind them,
+   so the eyes carry the lag and re-centre as the body catches up. */
+const EYE_YAW_LIMIT = 0.16;
+const EYE_PITCH_LIMIT = 0.1;
+const EYE_GAZE_X = 0.065;
+const EYE_GAZE_Y = 0.045;
+const EYE_RESPONSE = 22;
+const BODY_RESPONSE = 7;
 const POINTER_RESPONSE = 7.5;
-const BODY_TRIGGER_RATIO = 0.92;
-const BODY_RECENTER_RATIO = 0.28;
 
 const SWAY_AMPLITUDE = 0.06;
 const SWAY_SPEED = 0.5;
@@ -107,18 +113,23 @@ function measureAdvance(pre: HTMLPreElement): number {
   return advance > 0 ? advance : FALLBACK_ADVANCE;
 }
 
-/** Hysteresis keeps the body from twitching at the edge of the eye range. */
-export function shouldBodyFollow(
-  eyeYaw: number,
-  eyePitch: number,
-  following: boolean,
-): boolean {
-  const eyeDemand = Math.hypot(
-    eyeYaw / EYE_YAW_LIMIT,
-    eyePitch / EYE_PITCH_LIMIT,
+/**
+ * Maps a pointer offset from Puff onto a look angle in -limit..limit.
+ * `reachNegative` and `reachPositive` are the distances to the viewport edge
+ * on either side, so the edge of the window is the edge of the turn.
+ */
+export function lookAngle(
+  offset: number,
+  reachNegative: number,
+  reachPositive: number,
+  limit: number,
+): number {
+  const reach = Math.max(
+    MIN_LOOK_REACH,
+    offset < 0 ? reachNegative : reachPositive,
   );
-  return eyeDemand >
-    (following ? BODY_RECENTER_RATIO : BODY_TRIGGER_RATIO);
+  const amount = Math.min(1, Math.abs(offset) / reach);
+  return Math.sign(offset) * amount ** LOOK_CURVE * limit;
 }
 
 export function PuffScene({
@@ -185,12 +196,10 @@ export function PuffScene({
     let eyePitch = 0;
     let targetYaw = REST_YAW;
     let targetPitch = 0;
-    let bodyFollowing = false;
     let pointerActive = false;
     let pointerEngagement = 0;
     let mascotCenterPageX = 0;
     let mascotCenterPageY = 0;
-    let lookDepth = 1;
 
     /* The stamp pad is a tiny retained display list painted only on events. */
     let stampMode = false;
@@ -407,7 +416,7 @@ export function PuffScene({
       /* Page coordinates avoid a layout read on every pointer event. */
       mascotCenterPageX = box.left + window.scrollX + box.width / 2;
       mascotCenterPageY = box.top + window.scrollY + box.height / 2;
-      lookDepth = Math.max(box.width, box.height) * LOOK_DEPTH_RATIO;
+      if (pointerActive) aimAt(lastPointerClientX, lastPointerClientY);
 
       const advance = measureAdvance(ink!);
       cellAspect = advance / CELL_LINE_RATIO;
@@ -449,14 +458,9 @@ export function PuffScene({
         eyeYaw += (targetEyeYaw - eyeYaw) * eyeEase;
         eyePitch += (targetEyePitch - eyePitch) * eyeEase;
 
-        bodyFollowing = pointerActive
-          ? shouldBodyFollow(eyeYaw, eyePitch, bodyFollowing)
-          : true;
-        if (bodyFollowing) {
-          const bodyEase = 1 - Math.exp(-BODY_RESPONSE * step);
-          lookYaw += yawDelta * bodyEase;
-          lookPitch += pitchDelta * bodyEase;
-        }
+        const bodyEase = 1 - Math.exp(-BODY_RESPONSE * step);
+        lookYaw += yawDelta * bodyEase;
+        lookPitch += pitchDelta * bodyEase;
 
         const pointerEase = 1 - Math.exp(-POINTER_RESPONSE * step);
         pointerEngagement +=
@@ -608,17 +612,31 @@ export function PuffScene({
         return;
       }
 
-      const dx = event.clientX + window.scrollX - mascotCenterPageX;
-      const dy = event.clientY + window.scrollY - mascotCenterPageY;
-      targetYaw = Math.max(
-        -LOOK_YAW,
-        Math.min(LOOK_YAW, Math.atan2(dx, lookDepth)),
-      );
-      targetPitch = Math.max(
-        -LOOK_PITCH,
-        Math.min(LOOK_PITCH, Math.atan2(dy, lookDepth)),
-      );
+      aimAt(event.clientX, event.clientY);
       pointerActive = true;
+    }
+
+    function aimAt(clientX: number, clientY: number) {
+      const centerX = mascotCenterPageX - window.scrollX;
+      const centerY = mascotCenterPageY - window.scrollY;
+      targetYaw = lookAngle(
+        clientX - centerX,
+        centerX,
+        window.innerWidth - centerX,
+        LOOK_YAW,
+      );
+      targetPitch = lookAngle(
+        clientY - centerY,
+        centerY,
+        window.innerHeight - centerY,
+        LOOK_PITCH,
+      );
+    }
+
+    /* Scrolling moves Puff under a still pointer; keep looking at it. */
+    function onScroll() {
+      if (stampMode || !pointerActive || suspendedRef.current) return;
+      aimAt(lastPointerClientX, lastPointerClientY);
     }
 
     function onPointerDown(event: PointerEvent) {
@@ -700,6 +718,7 @@ export function PuffScene({
     window.addEventListener("pointerout", onPointerOut, { passive: true });
     window.addEventListener("blur", resetPointer);
     window.addEventListener("resize", queueResize, { passive: true });
+    window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("click", onStageClick);
     reduceMotion.addEventListener("change", onMotionPreferenceChange);
     frameHandle = requestAnimationFrame(tick);
@@ -717,6 +736,7 @@ export function PuffScene({
       window.removeEventListener("pointerout", onPointerOut);
       window.removeEventListener("blur", resetPointer);
       window.removeEventListener("resize", queueResize);
+      window.removeEventListener("scroll", onScroll);
       window.removeEventListener("click", onStageClick);
       reduceMotion.removeEventListener("change", onMotionPreferenceChange);
 

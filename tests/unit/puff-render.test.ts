@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import { renderPuff } from "@/lib/puff/render";
-import { shouldBodyFollow } from "@/components/puff-scene";
+import { lookAngle } from "@/components/puff-scene";
 import {
   appendPuffStamp,
   createPuffStamp,
@@ -171,10 +171,21 @@ describe("lib/puff/model", () => {
 });
 
 describe("Puff's gaze rig", () => {
-  it("starts body movement at the eye limit and stops near centre", () => {
-    expect(shouldBodyFollow(0.05, 0, false)).toBe(false);
-    expect(shouldBodyFollow(0.125, 0, false)).toBe(true);
-    expect(shouldBodyFollow(0.05, 0, true)).toBe(true);
-    expect(shouldBodyFollow(0.01, 0, true)).toBe(false);
+  it("maps the viewport edge on each side to the full turn", () => {
+    expect(lookAngle(0, 900, 400, 0.5)).toBe(0);
+    expect(lookAngle(-900, 900, 400, 0.5)).toBeCloseTo(-0.5);
+    expect(lookAngle(400, 900, 400, 0.5)).toBeCloseTo(0.5);
+    expect(lookAngle(2000, 900, 400, 0.5)).toBeCloseTo(0.5);
+  });
+
+  it("keeps responding across the page instead of saturating near Puff", () => {
+    const near = lookAngle(-300, 1100, 340, 0.5);
+    const far = lookAngle(-800, 1100, 340, 0.5);
+    expect(Math.abs(near)).toBeLessThan(0.5);
+    expect(Math.abs(far)).toBeGreaterThan(Math.abs(near));
+  });
+
+  it("does not snap to full turn when Puff sits near an edge", () => {
+    expect(lookAngle(40, 900, 10, 0.5)).toBeLessThan(0.25);
   });
 });
